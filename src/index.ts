@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { createTwoFilesPatch } from 'diff';
 import express from 'express';
 import type { Request, Response } from 'express';
+import { encode } from 'gpt-tokenizer';
 import {
   initTiddlyWiki,
   queryTiddlers,
@@ -32,6 +33,8 @@ import { getFilterReference } from './filter-reference.js';
 const QueryTiddlersInput = z.object({
   filter: z.string().describe('TiddlyWiki filter expression'),
   includeText: z.boolean().optional().describe('Include text content in results (default: false)'),
+  offset: z.number().int().min(0).optional().describe('Number of results to skip (default: 0)'),
+  limit: z.number().int().min(1).max(100).optional().describe('Maximum number of results to return (default: unlimited, max: 100)'),
 });
 
 const GetTiddlerInput = z.object({
@@ -69,6 +72,51 @@ const server = new Server(
   }
 );
 
+// Token counting and response size validation
+const MAX_RESPONSE_TOKENS = 23000; // Safe threshold below ~25k limit
+
+/**
+ * Count tokens in a string using gpt-tokenizer
+ */
+function countTokens(text: string): number {
+  return encode(text).length;
+}
+
+/**
+ * Validate response size and suggest pagination if needed
+ * Returns null if response is OK, or an error message if too large
+ */
+function validateResponseSize(results: any[], filter: string, includeText: boolean): string | null {
+  const responseJson = JSON.stringify(results, null, 2);
+  const tokenCount = countTokens(responseJson);
+
+  if (tokenCount <= MAX_RESPONSE_TOKENS) {
+    return null; // Response is fine
+  }
+
+  // Calculate how many items would fit
+  const avgTokensPerItem = tokenCount / results.length;
+  const suggestedLimit = Math.floor(MAX_RESPONSE_TOKENS / avgTokensPerItem);
+
+  const errorMessage = `Query matched ${results.length} tiddlers but response would be ${tokenCount.toLocaleString()} tokens (exceeds ${MAX_RESPONSE_TOKENS.toLocaleString()} token limit).
+
+To retrieve results, use the limit parameter with offset for pagination.
+
+**Suggested query:**
+\`\`\`
+query_tiddlers({
+  filter: "${filter}",
+  includeText: ${includeText},
+  limit: ${suggestedLimit},
+  offset: 0
+})
+\`\`\`
+
+Then increment offset by ${suggestedLimit} for subsequent batches (offset: ${suggestedLimit}, offset: ${suggestedLimit * 2}, etc.) until you've retrieved all ${results.length} tiddlers.`;
+
+  return errorMessage;
+}
+
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
@@ -76,7 +124,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: 'query_tiddlers',
         description:
-          'Query tiddlers using TiddlyWiki filter syntax. Returns matching tiddlers with metadata and optionally text content. Supports server-side filtering for complex queries.',
+          'Query tiddlers using TiddlyWiki filter syntax. Returns matching tiddlers with metadata and optionally text content. Supports server-side filtering for complex queries. Use offset/limit for pagination when dealing with large result sets.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -89,6 +137,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: 'boolean',
               description: 'Include text content in results (default: false). Set to true to get full tiddler content.',
               default: false,
+            },
+            offset: {
+              type: 'number',
+              description: 'Number of results to skip for pagination (default: 0). Use with limit to paginate through large result sets.',
+              default: 0,
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum number of results to return (default: unlimited, max: 100). Use for pagination to avoid response size limits.',
             },
           },
           required: ['filter'],
@@ -272,7 +329,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     switch (name) {
       case 'query_tiddlers': {
         const input = QueryTiddlersInput.parse(args);
-        const results = await queryTiddlers(input.filter, input.includeText ?? false);
+        const includeText = input.includeText ?? false;
+        const offset = input.offset ?? 0;
+        const limit = input.limit;
+
+        // Fetch results with pagination parameters
+        const results = await queryTiddlers(input.filter, includeText, offset, limit);
+
+        // Validate response size
+        const sizeError = validateResponseSize(results, input.filter, includeText);
+        if (sizeError) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: sizeError,
+              },
+            ],
+            isError: true,
+          };
+        }
 
         return {
           content: [
@@ -514,45 +590,17 @@ async function startHttpTransport() {
   });
 
   // MCP JSON-RPC endpoint
+  // TODO: Implement proper MCP HTTP transport in Phase 2
+  // For now, this is a placeholder that returns an error
   app.post('/mcp', async (req: Request, res: Response) => {
-    try {
-      const { method, params, id } = req.body;
-
-      // Route to appropriate handler based on method
-      let result;
-      if (method === 'tools/list') {
-        const handler = server['requestHandlers'].get(ListToolsRequestSchema);
-        if (handler) {
-          result = await handler({ method, params });
-        }
-      } else if (method === 'tools/call') {
-        const handler = server['requestHandlers'].get(CallToolRequestSchema);
-        if (handler) {
-          result = await handler({ method, params });
-        }
-      } else {
-        res.status(400).json({
-          jsonrpc: '2.0',
-          id,
-          error: { code: -32601, message: 'Method not found' },
-        });
-        return;
-      }
-
-      res.json({
-        jsonrpc: '2.0',
-        id,
-        result,
-      });
-    } catch (error) {
-      const err = error as Error;
-      console.error(`[MCP Server] HTTP handler error:`, err);
-      res.status(500).json({
-        jsonrpc: '2.0',
-        id: req.body.id,
-        error: { code: -32603, message: err.message },
-      });
-    }
+    res.status(501).json({
+      jsonrpc: '2.0',
+      id: req.body.id || null,
+      error: {
+        code: -32601,
+        message: 'HTTP transport not yet fully implemented. Use stdio transport for now.',
+      },
+    });
   });
 
   // Start HTTP server

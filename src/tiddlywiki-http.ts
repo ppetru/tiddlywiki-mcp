@@ -80,13 +80,19 @@ function getHeaders(includeJson: boolean = false): HeadersInit {
 /**
  * Query tiddlers using filter syntax
  */
-export async function queryTiddlers(filter: string, includeText: boolean = false): Promise<Tiddler[]> {
+export async function queryTiddlers(
+  filter: string,
+  includeText: boolean = false,
+  offset: number = 0,
+  limit?: number
+): Promise<Tiddler[]> {
   const baseUrl = await getBaseUrl();
   const encodedFilter = encodeURIComponent(filter);
   const url = `${baseUrl}/recipes/default/tiddlers.json?filter=${encodedFilter}`;
 
   console.error(`[TiddlyWiki HTTP] Querying: ${filter}`);
   console.error(`[TiddlyWiki HTTP] URL: ${url}`);
+  console.error(`[TiddlyWiki HTTP] Pagination: offset=${offset}, limit=${limit ?? 'unlimited'}`);
 
   const response = await fetch(url, {
     method: 'GET',
@@ -97,7 +103,11 @@ export async function queryTiddlers(filter: string, includeText: boolean = false
     throw new Error(`Failed to query tiddlers: ${response.status} ${response.statusText}`);
   }
 
-  const tiddlers = await response.json() as Tiddler[];
+  let tiddlers = await response.json() as Tiddler[];
+
+  // Apply offset and limit BEFORE fetching full content (optimization)
+  const endIndex = limit !== undefined ? offset + limit : undefined;
+  tiddlers = tiddlers.slice(offset, endIndex);
 
   // If includeText is false, the API already excludes text by default
   // If includeText is true, we need to fetch each tiddler individually
