@@ -1,0 +1,40 @@
+{
+  "name": "tiddlywiki-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for TiddlyWiki with stdio and HTTP transport support",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "format": "prettier --write 'src/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts'"
+  },
+  "keywords": ["mcp", "tiddlywiki", "model-context-protocol"],
+  "author": "ppetru",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8",
+    "diff": "^5.2.0",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/diff": "^5.2.0",
+    "@types/express": "^5.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.18.2",
+    "@typescript-eslint/parser": "^8.18.2",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8"
+  }
+}
