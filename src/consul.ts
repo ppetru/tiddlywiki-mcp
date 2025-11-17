@@ -4,10 +4,7 @@
  * Resolves Consul service names to host:port via SRV DNS records
  */
 
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
+import { promises as dns } from 'dns';
 
 export interface ServiceEndpoint {
   host: string;
@@ -21,39 +18,37 @@ export interface ServiceEndpoint {
  */
 export async function resolveConsulService(serviceName: string): Promise<ServiceEndpoint> {
   try {
-    // Execute host command to get SRV record
-    const { stdout, stderr } = await execAsync(`host -t srv ${serviceName}`);
+    // Resolve SRV record using Node.js DNS
+    const srvRecords = await dns.resolveSrv(serviceName);
 
-    if (stderr) {
-      console.error(`[Consul] Warning while resolving ${serviceName}:`, stderr);
+    if (!srvRecords || srvRecords.length === 0) {
+      throw new Error(`No SRV records found for ${serviceName}`);
     }
 
-    // Parse SRV record output
-    // Example: "captainslog.service.consul has SRV record 1 1 29530 c0a80155.addr.alo.consul."
-    const srvMatch = stdout.match(/has SRV record \d+ \d+ (\d+) (.+)\.?$/m);
-
-    if (!srvMatch) {
-      throw new Error(`Invalid SRV record format: ${stdout.trim()}`);
-    }
-
-    const port = parseInt(srvMatch[1], 10);
-    const hostname = srvMatch[2].replace(/\.$/, ''); // Remove trailing dot
+    // Use the first SRV record (could be enhanced with priority/weight sorting)
+    const srv = srvRecords[0];
+    const port = srv.port;
+    const hostname = srv.name;
 
     // Resolve the hostname to IP address
-    const { stdout: addrStdout } = await execAsync(`host -t a ${hostname}`);
-    const addrMatch = addrStdout.match(/has address (.+)$/m);
+    try {
+      const addresses = await dns.resolve4(hostname);
 
-    if (!addrMatch) {
+      if (!addresses || addresses.length === 0) {
+        // If A record resolution fails, try using the hostname as-is
+        console.warn(`[Consul] Could not resolve ${hostname}, using as-is`);
+        return { host: hostname, port };
+      }
+
+      const host = addresses[0];
+      console.error(`[Consul] Resolved ${serviceName} -> ${host}:${port}`);
+
+      return { host, port };
+    } catch (addrError) {
       // If A record resolution fails, try using the hostname as-is
       console.warn(`[Consul] Could not resolve ${hostname}, using as-is`);
       return { host: hostname, port };
     }
-
-    const host = addrMatch[1].trim();
-
-    console.error(`[Consul] Resolved ${serviceName} -> ${host}:${port}`);
-
-    return { host, port };
   } catch (error) {
     const err = error as Error;
     throw new Error(`Failed to resolve Consul service ${serviceName}: ${err.message}`);

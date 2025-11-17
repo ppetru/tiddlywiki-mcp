@@ -29,3 +29,8 @@ result-*
 
 # Test coverage
 coverage/
+
+# Embeddings database
+embeddings.db
+embeddings.db-shm
+embeddings.db-wal

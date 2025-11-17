@@ -40,6 +40,16 @@ export function initTiddlyWiki(cfg: TiddlyWikiConfig): void {
 }
 
 /**
+ * Get the configured auth user
+ */
+export function getAuthUser(): string {
+  if (!config) {
+    throw new Error('TiddlyWiki client not initialized');
+  }
+  return config.authUser;
+}
+
+/**
  * Get the base URL for TiddlyWiki API, with caching
  */
 async function getBaseUrl(): Promise<string> {
@@ -89,10 +99,6 @@ export async function queryTiddlers(
   const baseUrl = await getBaseUrl();
   const encodedFilter = encodeURIComponent(filter);
   const url = `${baseUrl}/recipes/default/tiddlers.json?filter=${encodedFilter}`;
-
-  console.error(`[TiddlyWiki HTTP] Querying: ${filter}`);
-  console.error(`[TiddlyWiki HTTP] URL: ${url}`);
-  console.error(`[TiddlyWiki HTTP] Pagination: offset=${offset}, limit=${limit ?? 'unlimited'}`);
 
   const response = await fetch(url, {
     method: 'GET',
@@ -153,8 +159,8 @@ export async function putTiddler(tiddler: Tiddler): Promise<void> {
   const encodedTitle = encodeURIComponent(tiddler.title);
   const url = `${baseUrl}/recipes/default/tiddlers/${encodedTitle}`;
 
-  // Remove server-managed fields
-  const { revision, bag, modified, modifier, ...tiddlerFields } = tiddler;
+  // Remove server-managed fields (but keep modified/modifier which we set explicitly)
+  const { revision, bag, ...tiddlerFields } = tiddler;
 
   const response = await fetch(url, {
     method: 'PUT',
@@ -214,7 +220,7 @@ export function createTiddlerObject(
   text: string,
   tags: string = '',
   type: string = 'text/markdown',
-  creator: string = 'ppetru'
+  creator: string
 ): Tiddler {
   return {
     title,
@@ -229,7 +235,7 @@ export function createTiddlerObject(
 /**
  * Update an existing tiddler while preserving metadata
  */
-export function updateTiddlerObject(current: Tiddler, updates: Partial<Tiddler>): Tiddler {
+export function updateTiddlerObject(current: Tiddler, updates: Partial<Tiddler>, modifier: string): Tiddler {
   return {
     ...current,
     ...updates,
@@ -237,10 +243,11 @@ export function updateTiddlerObject(current: Tiddler, updates: Partial<Tiddler>)
     title: current.title,
     created: current.created,
     creator: current.creator,
+    // Set modification metadata
+    modified: generateTimestamp(),
+    modifier,
     // Remove server-managed fields
     revision: undefined,
     bag: undefined,
-    modified: undefined,
-    modifier: undefined,
   };
 }
