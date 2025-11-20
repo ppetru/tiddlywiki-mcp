@@ -5,6 +5,7 @@
  */
 
 import { promises as dns } from 'dns';
+import * as logger from './logger.js';
 
 export interface ServiceEndpoint {
   host: string;
@@ -36,17 +37,17 @@ export async function resolveConsulService(serviceName: string): Promise<Service
 
       if (!addresses || addresses.length === 0) {
         // If A record resolution fails, try using the hostname as-is
-        console.warn(`[Consul] Could not resolve ${hostname}, using as-is`);
+        logger.warn(`[Consul] Could not resolve ${hostname}, using as-is`);
         return { host: hostname, port };
       }
 
       const host = addresses[0];
-      console.error(`[Consul] Resolved ${serviceName} -> ${host}:${port}`);
+      logger.log(`[Consul] Resolved ${serviceName} -> ${host}:${port}`);
 
       return { host, port };
     } catch (addrError) {
       // If A record resolution fails, try using the hostname as-is
-      console.warn(`[Consul] Could not resolve ${hostname}, using as-is`);
+      logger.warn(`[Consul] Could not resolve ${hostname}, using as-is`);
       return { host: hostname, port };
     }
   } catch (error) {

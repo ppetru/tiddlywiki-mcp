@@ -5,6 +5,7 @@
  */
 
 import { getServiceUrl } from './consul.js';
+import * as logger from './logger.js';
 
 export interface Tiddler {
   title: string;
@@ -36,7 +37,7 @@ const CACHE_TTL = 60000; // 1 minute
  */
 export function initTiddlyWiki(cfg: TiddlyWikiConfig): void {
   config = cfg;
-  console.error('[TiddlyWiki HTTP] Initialized with service:', cfg.consulService);
+  logger.log('[TiddlyWiki HTTP] Initialized with service:', cfg.consulService);
 }
 
 /**
@@ -172,7 +173,7 @@ export async function putTiddler(tiddler: Tiddler): Promise<void> {
     throw new Error(`Failed to put tiddler "${tiddler.title}": ${response.status} ${response.statusText}`);
   }
 
-  console.error(`[TiddlyWiki HTTP] Updated tiddler: ${tiddler.title}`);
+  logger.log(`[TiddlyWiki HTTP] Updated tiddler: ${tiddler.title}`);
 }
 
 /**
@@ -192,7 +193,7 @@ export async function deleteTiddler(title: string): Promise<void> {
     throw new Error(`Failed to delete tiddler "${title}": ${response.status} ${response.statusText}`);
   }
 
-  console.error(`[TiddlyWiki HTTP] Deleted tiddler: ${title}`);
+  logger.log(`[TiddlyWiki HTTP] Deleted tiddler: ${title}`);
 }
 
 /**

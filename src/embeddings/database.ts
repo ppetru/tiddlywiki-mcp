@@ -37,6 +37,9 @@ export class EmbeddingsDB {
 
     // Initialize schema
     this.initSchema();
+
+    // Migrate any existing empty timestamps to sentinel value
+    this.migrateEmptyTimestamps();
   }
 
   private initSchema() {
@@ -70,6 +73,26 @@ export class EmbeddingsDB {
       CREATE INDEX IF NOT EXISTS idx_embedding_metadata_tiddler
         ON embedding_metadata(tiddler_title);
     `);
+  }
+
+  /**
+   * Migrate existing empty timestamps to sentinel value
+   * Fixes infinite re-indexing bug for tiddlers without modified timestamps
+   */
+  private migrateEmptyTimestamps(): void {
+    const MISSING_TIMESTAMP = '00000000000000000';
+
+    const stmt = this.db.prepare(`
+      UPDATE sync_status
+      SET last_modified = ?
+      WHERE last_modified = ''
+    `);
+
+    const result = stmt.run(MISSING_TIMESTAMP);
+
+    if (result.changes > 0) {
+      console.log(`[DB Migration] Updated ${result.changes} entries with missing timestamps`);
+    }
   }
 
   insertEmbedding(
