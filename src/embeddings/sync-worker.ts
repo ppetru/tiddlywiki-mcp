@@ -1,6 +1,11 @@
 import { EmbeddingsDB } from './database.js';
 import { OllamaClient } from './ollama-client.js';
 import { queryTiddlers, Tiddler } from '../tiddlywiki-http.js';
+import * as logger from '../logger.js';
+
+// Sentinel value for tiddlers without modified timestamp
+// Prevents infinite re-indexing loop for tiddlers that don't track modifications
+const MISSING_TIMESTAMP = '00000000000000000';
 
 export interface SyncWorkerConfig {
   syncIntervalMs: number; // How often to check for updates (default: 5 min)
@@ -35,37 +40,37 @@ export class SyncWorker {
    */
   async start(): Promise<void> {
     if (!this.config.enabled) {
-      console.log('[SyncWorker] Disabled, not starting');
+      logger.log('[SyncWorker] Disabled, not starting');
       return;
     }
 
     if (this.isRunning) {
-      console.log('[SyncWorker] Already running');
+      logger.log('[SyncWorker] Already running');
       return;
     }
 
-    console.log('[SyncWorker] Starting...');
+    logger.log('[SyncWorker] Starting...');
     this.isRunning = true;
 
     // Check Ollama health
     const healthy = await this.ollama.healthCheck();
     if (!healthy) {
-      console.error('[SyncWorker] Ollama is not healthy, will retry on next sync');
+      logger.error('[SyncWorker] Ollama is not healthy, will retry on next sync');
     }
 
     // Run initial sync (non-blocking)
     this.runSync().catch(error => {
-      console.error('[SyncWorker] Initial sync error:', error);
+      logger.error('[SyncWorker] Initial sync error:', error);
     });
 
     // Schedule periodic syncs
     this.intervalId = setInterval(() => {
       this.runSync().catch(error => {
-        console.error('[SyncWorker] Periodic sync error:', error);
+        logger.error('[SyncWorker] Periodic sync error:', error);
       });
     }, this.config.syncIntervalMs);
 
-    console.log(`[SyncWorker] Started with ${this.config.syncIntervalMs / 1000}s interval`);
+    logger.log(`[SyncWorker] Started with ${this.config.syncIntervalMs / 1000}s interval`);
   }
 
   /**
@@ -76,7 +81,7 @@ export class SyncWorker {
       return;
     }
 
-    console.log('[SyncWorker] Stopping...');
+    logger.log('[SyncWorker] Stopping...');
     this.isRunning = false;
 
     if (this.intervalId) {
@@ -84,7 +89,7 @@ export class SyncWorker {
       this.intervalId = null;
     }
 
-    console.log('[SyncWorker] Stopped');
+    logger.log('[SyncWorker] Stopped');
   }
 
   /**
@@ -106,7 +111,7 @@ export class SyncWorker {
    */
   private async runSync(): Promise<void> {
     if (this.isSyncing) {
-      console.log('[SyncWorker] Sync already in progress, skipping');
+      logger.log('[SyncWorker] Sync already in progress, skipping');
       return;
     }
 
@@ -114,41 +119,56 @@ export class SyncWorker {
     const startTime = Date.now();
 
     try {
-      console.log('[SyncWorker] Starting sync cycle...');
+      logger.log('[SyncWorker] Starting sync cycle...');
 
       // Check Ollama health
       const healthy = await this.ollama.healthCheck();
       if (!healthy) {
-        console.error('[SyncWorker] Ollama is not available, skipping sync');
+        logger.error('[SyncWorker] Ollama is not available, skipping sync');
         return;
       }
 
       // Get all tiddlers (excluding system tiddlers)
       const allTiddlers = await queryTiddlers(
         '[!is[system]sort[title]]',
-        false // Metadata only for now
+        false // Only need metadata for comparison
       );
 
-      console.log(`[SyncWorker] Found ${allTiddlers.length} total tiddlers`);
+      // Filter out filesystem paths (un-imported .tid files)
+      // Real tiddler titles don't contain full filesystem paths
+      const validTiddlers = allTiddlers.filter(t =>
+        !t.title.startsWith('/') && !t.title.includes('.tid')
+      );
+
+      logger.log(`[SyncWorker] Found ${validTiddlers.length} total tiddlers (${allTiddlers.length - validTiddlers.length} filesystem paths filtered)`);
 
       // Determine which tiddlers need indexing
       const tiddlersToIndex: Tiddler[] = [];
 
-      for (const tiddler of allTiddlers) {
+      for (const tiddler of validTiddlers) {
         const syncStatus = this.db.getSyncStatus(tiddler.title);
 
+        // Normalize undefined modified to sentinel value for consistent comparison
+        const tiddlerModified = tiddler.modified || MISSING_TIMESTAMP;
+
         // Index if never indexed OR if modified timestamp changed
-        if (!syncStatus || syncStatus.last_modified !== tiddler.modified) {
+        if (!syncStatus || syncStatus.last_modified !== tiddlerModified) {
+          // Debug logging
+          if (syncStatus) {
+            logger.log(`[SyncWorker] Re-indexing ${tiddler.title}: stored="${syncStatus.last_modified}" vs current="${tiddlerModified}"`);
+          } else {
+            logger.log(`[SyncWorker] Indexing NEW tiddler: ${tiddler.title} (modified: ${tiddlerModified})`);
+          }
           tiddlersToIndex.push(tiddler);
         }
       }
 
       if (tiddlersToIndex.length === 0) {
-        console.log('[SyncWorker] No tiddlers need indexing');
+        logger.log('[SyncWorker] No tiddlers need indexing');
         return;
       }
 
-      console.log(`[SyncWorker] Indexing ${tiddlersToIndex.length} tiddlers...`);
+      logger.log(`[SyncWorker] Indexing ${tiddlersToIndex.length} tiddlers...`);
 
       // Process tiddlers in batches
       let indexed = 0;
@@ -160,13 +180,13 @@ export class SyncWorker {
         );
 
         indexed += batch.length;
-        console.log(`[SyncWorker] Progress: ${indexed}/${tiddlersToIndex.length} tiddlers indexed`);
+        logger.log(`[SyncWorker] Progress: ${indexed}/${tiddlersToIndex.length} tiddlers indexed`);
       }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      console.log(`[SyncWorker] Sync cycle completed in ${duration}s. Indexed ${tiddlersToIndex.length} tiddlers.`);
+      logger.log(`[SyncWorker] Sync cycle completed in ${duration}s. Indexed ${tiddlersToIndex.length} tiddlers.`);
     } catch (error) {
-      console.error('[SyncWorker] Sync cycle error:', error);
+      logger.error('[SyncWorker] Sync cycle error:', error);
       throw error;
     } finally {
       this.isSyncing = false;
@@ -185,7 +205,7 @@ export class SyncWorker {
       );
 
       if (!fullTiddler || !fullTiddler.text) {
-        console.warn(`[SyncWorker] Tiddler ${tiddlerMetadata.title} has no text, skipping`);
+        logger.warn(`[SyncWorker] Tiddler ${tiddlerMetadata.title} has no text, skipping`);
         return;
       }
 
@@ -195,8 +215,8 @@ export class SyncWorker {
       // Chunk the text if needed
       const chunks = this.ollama.chunkText(fullTiddler.text);
 
-      // Generate embeddings for all chunks
-      const embeddings = await this.ollama.generateEmbeddings(chunks);
+      // Generate embeddings for all chunks with search_document prefix
+      const embeddings = await this.ollama.generateDocumentEmbeddings(chunks);
 
       // Store embeddings
       for (let i = 0; i < chunks.length; i++) {
@@ -216,14 +236,14 @@ export class SyncWorker {
       // Update sync status
       this.db.updateSyncStatus(
         fullTiddler.title,
-        fullTiddler.modified || '',
+        fullTiddler.modified || MISSING_TIMESTAMP,
         chunks.length
       );
 
       const tokenCount = this.ollama.countTokens(fullTiddler.text);
-      console.log(`[SyncWorker] Indexed ${fullTiddler.title} (${tokenCount} tokens, ${chunks.length} chunks)`);
+      logger.log(`[SyncWorker] Indexed ${fullTiddler.title} (${tokenCount} tokens, ${chunks.length} chunks)`);
     } catch (error) {
-      console.error(`[SyncWorker] Error indexing tiddler ${tiddlerMetadata.title}:`, error);
+      logger.error(`[SyncWorker] Error indexing tiddler ${tiddlerMetadata.title}:`, error);
       throw error;
     }
   }

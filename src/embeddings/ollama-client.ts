@@ -1,4 +1,5 @@
 import { encode } from 'gpt-tokenizer';
+import * as logger from '../logger.js';
 
 interface OllamaEmbedResponse {
   model: string;
@@ -48,6 +49,33 @@ export class OllamaClient {
     return embeddings[0];
   }
 
+  /**
+   * Generate embedding for a document with proper task prefix.
+   * Uses "search_document:" prefix as required by nomic-embed-text for RAG.
+   */
+  async generateDocumentEmbedding(text: string): Promise<number[]> {
+    const prefixedText = `search_document: ${text}`;
+    return this.generateEmbedding(prefixedText);
+  }
+
+  /**
+   * Generate embeddings for multiple documents with proper task prefix.
+   * Uses "search_document:" prefix as required by nomic-embed-text for RAG.
+   */
+  async generateDocumentEmbeddings(texts: string[]): Promise<number[][]> {
+    const prefixedTexts = texts.map(text => `search_document: ${text}`);
+    return this.generateEmbeddings(prefixedTexts);
+  }
+
+  /**
+   * Generate embedding for a query with proper task prefix.
+   * Uses "search_query:" prefix as required by nomic-embed-text for RAG.
+   */
+  async generateQueryEmbedding(text: string): Promise<number[]> {
+    const prefixedText = `search_query: ${text}`;
+    return this.generateEmbedding(prefixedText);
+  }
+
   async healthCheck(): Promise<boolean> {
     try {
       const response = await fetch(this.baseUrl, {
@@ -55,7 +83,7 @@ export class OllamaClient {
       });
       return response.ok;
     } catch (error) {
-      console.error('Ollama health check failed:', error);
+      logger.error('Ollama health check failed:', error);
       return false;
     }
   }
