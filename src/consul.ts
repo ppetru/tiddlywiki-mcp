@@ -7,9 +7,22 @@
 import { promises as dns } from 'dns';
 import * as logger from './logger.js';
 
+// DNS resolution timeout (10 seconds)
+const DNS_TIMEOUT = 10000;
+
 export interface ServiceEndpoint {
   host: string;
   port: number;
+}
+
+/**
+ * Wrap a promise with a timeout
+ */
+async function withTimeout<T>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> {
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(errorMsg)), ms)
+  );
+  return Promise.race([promise, timeout]);
 }
 
 /**
@@ -19,8 +32,14 @@ export interface ServiceEndpoint {
  */
 export async function resolveConsulService(serviceName: string): Promise<ServiceEndpoint> {
   try {
-    // Resolve SRV record using Node.js DNS
-    const srvRecords = await dns.resolveSrv(serviceName);
+    logger.log(`[Consul] Resolving SRV record for ${serviceName}...`);
+
+    // Resolve SRV record using Node.js DNS with timeout
+    const srvRecords = await withTimeout(
+      dns.resolveSrv(serviceName),
+      DNS_TIMEOUT,
+      `DNS SRV resolution timed out for ${serviceName} after ${DNS_TIMEOUT}ms`
+    );
 
     if (!srvRecords || srvRecords.length === 0) {
       throw new Error(`No SRV records found for ${serviceName}`);
@@ -31,9 +50,13 @@ export async function resolveConsulService(serviceName: string): Promise<Service
     const port = srv.port;
     const hostname = srv.name;
 
-    // Resolve the hostname to IP address
+    // Resolve the hostname to IP address with timeout
     try {
-      const addresses = await dns.resolve4(hostname);
+      const addresses = await withTimeout(
+        dns.resolve4(hostname),
+        DNS_TIMEOUT,
+        `DNS A record resolution timed out for ${hostname} after ${DNS_TIMEOUT}ms`
+      );
 
       if (!addresses || addresses.length === 0) {
         // If A record resolution fails, try using the hostname as-is
@@ -46,8 +69,9 @@ export async function resolveConsulService(serviceName: string): Promise<Service
 
       return { host, port };
     } catch (addrError) {
-      // If A record resolution fails, try using the hostname as-is
-      logger.warn(`[Consul] Could not resolve ${hostname}, using as-is`);
+      // If A record resolution fails (including timeout), try using the hostname as-is
+      const errMsg = addrError instanceof Error ? addrError.message : String(addrError);
+      logger.warn(`[Consul] Could not resolve ${hostname}: ${errMsg}, using as-is`);
       return { host: hostname, port };
     }
   } catch (error) {

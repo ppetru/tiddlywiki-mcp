@@ -4,6 +4,9 @@
  *
  * MCP server for TiddlyWiki with stdio and HTTP transport support
  * Supports both local development (stdio) and Nomad deployment (HTTP)
+ *
+ * Uses stateless mode for HTTP transport: each request gets its own Server instance
+ * to prevent request ID collisions when multiple clients connect concurrently.
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -14,7 +17,6 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
-  isInitializeRequest,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { createTwoFilesPatch } from 'diff';
@@ -56,37 +58,26 @@ const UpdateTiddlerInput = z.object({
   text: z.string().optional().describe('New text content'),
   tags: z.string().optional().describe('New tags (space-separated)'),
   type: z.string().optional().describe('Content type (e.g., text/markdown)'),
-});
+}).passthrough(); // Allow additional custom fields
 
 const CreateTiddlerInput = z.object({
   title: z.string().describe('Title of the new tiddler'),
   text: z.string().describe('Text content'),
   tags: z.string().optional().describe('Tags (space-separated)'),
   type: z.string().optional().describe('Content type (default: text/markdown)'),
-});
+}).passthrough(); // Allow additional custom fields
 
 const DeleteTiddlerInput = z.object({
   title: z.string().describe('Title of the tiddler to delete'),
 });
 
-// Global embeddings infrastructure
+// Global embeddings infrastructure (singletons - shared across requests)
 let embeddingsDB: EmbeddingsDB | null = null;
 let ollamaClient: OllamaClient | null = null;
 let syncWorker: SyncWorker | null = null;
 
-// Initialize the MCP server
-const server = new Server(
-  {
-    name: 'tiddlywiki-http-mcp-server',
-    version: '1.0.0',
-  },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
-    },
-  }
-);
+// Server for stdio transport (created once, used for the lifetime of the process)
+let stdioServer: Server | null = null;
 
 // Token counting and response size validation
 const MAX_RESPONSE_TOKENS = 23000; // Safe threshold below ~25k limit
@@ -133,19 +124,46 @@ Then increment offset by ${suggestedLimit} for subsequent batches (offset: ${sug
   return errorMessage;
 }
 
-// List available resources
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  return {
-    resources: [
-      {
-        uri: 'filter-reference://syntax',
-        name: 'TiddlyWiki Filter Syntax Reference',
-        description: 'Complete reference documentation for TiddlyWiki filter operators and syntax',
-        mimeType: 'text/markdown',
+/**
+ * Create a new MCP server instance with all handlers registered.
+ * Used for stateless mode where each request gets its own server.
+ */
+function createServer(): Server {
+  const server = new Server(
+    {
+      name: 'tiddlywiki-http-mcp-server',
+      version: '1.0.0',
+    },
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
       },
-    ],
-  };
-});
+    }
+  );
+
+  registerHandlers(server);
+  return server;
+}
+
+/**
+ * Register all MCP handlers on a server instance.
+ * Separated from server creation to allow reuse with different transports.
+ */
+function registerHandlers(server: Server): void {
+  // List available resources
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return {
+      resources: [
+        {
+          uri: 'filter-reference://syntax',
+          name: 'TiddlyWiki Filter Syntax Reference',
+          description: 'Complete reference documentation for TiddlyWiki filter operators and syntax',
+          mimeType: 'text/markdown',
+        },
+      ],
+    };
+  });
 
 // Read resource content
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
@@ -209,7 +227,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       {
         name: 'update_tiddler',
         description:
-          'Update an existing tiddler. Shows a diff of changes and requests approval before applying. Preserves metadata like created timestamp.',
+          'Update an existing tiddler. Shows a diff of changes and requests approval before applying. Preserves metadata like created timestamp. Supports arbitrary custom fields beyond the standard ones (e.g., caption, summary, author, or any TiddlyWiki field).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -230,12 +248,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Content type like "text/markdown" or "text/vnd.tiddlywiki" (optional)',
             },
           },
+          additionalProperties: {
+            type: 'string',
+            description: 'Any additional TiddlyWiki field (e.g., caption, summary, author)',
+          },
           required: ['title'],
         },
       },
       {
         name: 'create_tiddler',
-        description: 'Create a new tiddler. Shows a preview and requests approval before creating.',
+        description:
+          'Create a new tiddler. Shows a preview and requests approval before creating. Supports arbitrary custom fields beyond the standard ones (e.g., caption, summary, author, or any TiddlyWiki field).',
         inputSchema: {
           type: 'object',
           properties: {
@@ -257,6 +280,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               description: 'Content type (default: text/markdown)',
               default: 'text/markdown',
             },
+          },
+          additionalProperties: {
+            type: 'string',
+            description: 'Any additional TiddlyWiki field (e.g., caption, summary, author)',
           },
           required: ['title', 'text'],
         },
@@ -545,11 +572,12 @@ Note: Semantic search returns results ordered by similarity, so using a lower li
           };
         }
 
-        // Build updated tiddler
-        const updates: Partial<Tiddler> = {};
-        if (input.text !== undefined) updates.text = input.text;
-        if (input.tags !== undefined) updates.tags = input.tags;
-        if (input.type !== undefined) updates.type = input.type;
+        // Build updated tiddler - include all custom fields from input
+        const { title, text, tags, type, ...customFields } = input;
+        const updates: Partial<Tiddler> = { ...customFields };
+        if (text !== undefined) updates.text = text;
+        if (tags !== undefined) updates.tags = tags;
+        if (type !== undefined) updates.type = type;
 
         const updated = updateTiddlerObject(current, updates, getAuthUser());
 
@@ -600,14 +628,18 @@ Note: Semantic search returns results ordered by similarity, so using a lower li
           };
         }
 
-        // Create new tiddler object
-        const newTiddler = createTiddlerObject(
-          input.title,
-          input.text,
-          input.tags || '',
-          input.type || 'text/markdown',
-          getAuthUser()
-        );
+        // Create new tiddler object with custom fields
+        const { title, text, tags, type, ...customFields } = input;
+        const newTiddler = {
+          ...createTiddlerObject(
+            title,
+            text,
+            tags || '',
+            type || 'text/markdown',
+            getAuthUser()
+          ),
+          ...customFields, // Add any custom fields
+        };
 
         // Generate preview
         const preview = formatTiddlerPreview(newTiddler);
@@ -695,18 +727,28 @@ Note: Semantic search returns results ordered by similarity, so using a lower li
     };
   }
 });
+}  // End of registerHandlers function
 
 /**
  * Start MCP server with stdio transport
  */
 async function startStdioTransport() {
+  stdioServer = createServer();
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await stdioServer.connect(transport);
   logger.log(`[MCP Server] Server running on stdio`);
 }
 
 /**
- * Start MCP server with HTTP transport
+ * Start MCP server with HTTP transport using stateless mode.
+ *
+ * In stateless mode, each request gets its own Server and Transport instance.
+ * This prevents request ID collisions when multiple clients connect concurrently.
+ * The MCP specification notes: "A single instance would cause request ID collisions
+ * when multiple clients connect concurrently."
+ *
+ * Note: Stateless mode does not support server-initiated messages (SSE streams).
+ * This is acceptable for our use case since we only respond to client requests.
  */
 async function startHttpTransport() {
   const app = express();
@@ -714,154 +756,94 @@ async function startHttpTransport() {
 
   app.use(express.json());
 
-  // Map to store transports by session ID
-  const transports: Record<string, StreamableHTTPServerTransport> = {};
-
   // Health check endpoint for Nomad
   app.get('/health', (_req: Request, res: Response) => {
     res.status(200).json({ status: 'healthy', service: 'tiddlywiki-mcp-server' });
   });
 
-  // MCP POST endpoint - handles JSON-RPC requests
-  app.post('/mcp', async (req: Request, res: Response) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
+  // Request timeout (90 seconds) as safety net against any blocking operations
+  const REQUEST_TIMEOUT_MS = 90000;
 
-    if (sessionId) {
-      logger.log(`[MCP Server] Received request for session: ${sessionId}`);
-    } else {
-      logger.log('[MCP Server] Received new request (no session ID)');
-    }
+  // MCP POST endpoint - handles JSON-RPC requests in stateless mode
+  app.post('/mcp', async (req: Request, res: Response) => {
+    const requestId = randomUUID().slice(0, 8);
+    logger.log(`[MCP Server] [${requestId}] Handling request (stateless mode)`);
+
+    // Create timeout promise
+    let timeoutId: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        reject(new Error(`Request timed out after ${REQUEST_TIMEOUT_MS}ms`));
+      }, REQUEST_TIMEOUT_MS);
+    });
 
     try {
-      let transport: StreamableHTTPServerTransport;
+      // Create fresh server and transport for this request
+      const server = createServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+      });
 
-      if (sessionId && transports[sessionId]) {
-        // Reuse existing transport for this session
-        transport = transports[sessionId];
-      } else if (!sessionId && isInitializeRequest(req.body)) {
-        // New initialization request - create new transport
-        logger.log('[MCP Server] Creating new transport for initialization request');
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (sid: string) => {
-            logger.log(`[MCP Server] Session initialized: ${sid}`);
-            transports[sid] = transport;
-          },
-          onsessionclosed: (sid: string) => {
-            logger.log(`[MCP Server] Session closed: ${sid}`);
-            delete transports[sid];
-          },
-        });
-
-        // Set up onclose handler for cleanup
-        transport.onclose = () => {
-          const sid = transport.sessionId;
-          if (sid && transports[sid]) {
-            logger.log(`[MCP Server] Transport closed for session ${sid}`);
-            delete transports[sid];
-          }
-        };
-
-        // Connect the transport to the MCP server
+      // Connect and handle the request with timeout
+      const handlePromise = (async () => {
         await server.connect(transport);
         await transport.handleRequest(req, res, req.body);
-        return;
-      } else {
-        // Invalid request - no session ID or not an initialization request
-        res.status(400).json({
-          jsonrpc: '2.0',
-          error: {
-            code: -32000,
-            message: 'Bad Request: No valid session ID provided',
-          },
-          id: null,
-        });
-        return;
-      }
+      })();
 
-      // Handle the request with existing transport
-      await transport.handleRequest(req, res, req.body);
+      await Promise.race([handlePromise, timeoutPromise]);
+
+      logger.log(`[MCP Server] [${requestId}] Request completed`);
     } catch (error) {
-      logger.error('[MCP Server] Error handling MCP request:', error);
+      const err = error as Error;
+      const isTimeout = err.message.includes('timed out');
+      logger.error(`[MCP Server] [${requestId}] ${isTimeout ? 'Request timeout' : 'Error handling request'}:`, err.message);
       if (!res.headersSent) {
-        res.status(500).json({
+        res.status(isTimeout ? 504 : 500).json({
           jsonrpc: '2.0',
           error: {
-            code: -32603,
-            message: 'Internal server error',
+            code: isTimeout ? -32001 : -32603,
+            message: isTimeout ? 'Request timeout' : 'Internal server error',
           },
           id: null,
         });
       }
-    }
-  });
-
-  // MCP GET endpoint - handles SSE streams
-  app.get('/mcp', async (req: Request, res: Response) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-    if (!sessionId || !transports[sessionId]) {
-      res.status(400).send('Invalid or missing session ID');
-      return;
-    }
-
-    const lastEventId = req.headers['last-event-id'];
-    if (lastEventId) {
-      logger.log(`[MCP Server] Client reconnecting with Last-Event-ID: ${lastEventId}`);
-    } else {
-      logger.log(`[MCP Server] Establishing SSE stream for session ${sessionId}`);
-    }
-
-    const transport = transports[sessionId];
-    await transport.handleRequest(req, res);
-  });
-
-  // MCP DELETE endpoint - handles session termination
-  app.delete('/mcp', async (req: Request, res: Response) => {
-    const sessionId = req.headers['mcp-session-id'] as string | undefined;
-
-    if (!sessionId || !transports[sessionId]) {
-      res.status(400).send('Invalid or missing session ID');
-      return;
-    }
-
-    logger.log(`[MCP Server] Received session termination request for session ${sessionId}`);
-
-    try {
-      const transport = transports[sessionId];
-      await transport.handleRequest(req, res);
-    } catch (error) {
-      logger.error('[MCP Server] Error handling session termination:', error);
-      if (!res.headersSent) {
-        res.status(500).send('Error processing session termination');
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
     }
+  });
+
+  // SSE streams not supported in stateless mode - return helpful error
+  app.get('/mcp', async (_req: Request, res: Response) => {
+    res.status(400).json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: 'SSE streams not supported in stateless mode. Use POST for all requests.',
+      },
+      id: null,
+    });
+  });
+
+  // DELETE not needed in stateless mode - return helpful error
+  app.delete('/mcp', async (_req: Request, res: Response) => {
+    res.status(400).json({
+      jsonrpc: '2.0',
+      error: {
+        code: -32000,
+        message: 'Session termination not needed in stateless mode.',
+      },
+      id: null,
+    });
   });
 
   // Start HTTP server
   app.listen(port, () => {
-    logger.log(`[MCP Server] HTTP server listening on port ${port}`);
+    logger.log(`[MCP Server] HTTP server listening on port ${port} (stateless mode)`);
     logger.log(`[MCP Server] Health check: http://localhost:${port}/health`);
     logger.log(`[MCP Server] MCP endpoint: http://localhost:${port}/mcp`);
   });
-
-  // Cleanup on shutdown
-  const cleanup = async () => {
-    logger.log('[MCP Server] Shutting down, cleaning up sessions...');
-    for (const sessionId in transports) {
-      try {
-        logger.log(`[MCP Server] Closing transport for session ${sessionId}`);
-        await transports[sessionId].close();
-        delete transports[sessionId];
-      } catch (error) {
-        logger.error(`[MCP Server] Error closing transport for session ${sessionId}:`, error);
-      }
-    }
-  };
-
-  // Attach cleanup to process events
-  process.on('SIGINT', cleanup);
-  process.on('SIGTERM', cleanup);
 }
 
 // Main startup function
@@ -872,6 +854,7 @@ async function main() {
   const transport = process.env.MCP_TRANSPORT || 'stdio';
   const ollamaUrl = process.env.OLLAMA_URL || 'http://ollama.service.consul:11434';
   const embeddingsEnabled = process.env.EMBEDDINGS_ENABLED !== 'false'; // Enabled by default
+  const embeddingsDbPath = process.env.EMBEDDINGS_DB_PATH || '/data/services/tiddlywiki-mcp/embeddings.db';
 
   logger.log(`[MCP Server] Starting TiddlyWiki MCP Server...`);
   logger.log(`[MCP Server] Transport: ${transport}`);
@@ -879,6 +862,9 @@ async function main() {
   logger.log(`[MCP Server] Auth header: ${authHeader}`);
   logger.log(`[MCP Server] Auth user: ${authUser}`);
   logger.log(`[MCP Server] Embeddings enabled: ${embeddingsEnabled}`);
+  if (embeddingsEnabled) {
+    logger.log(`[MCP Server] Embeddings database: ${embeddingsDbPath}`);
+  }
 
   try {
     // Initialize TiddlyWiki HTTP client
@@ -897,7 +883,7 @@ async function main() {
         logger.log(`[MCP Server] Ollama URL: ${ollamaUrl}`);
 
         // Initialize database
-        embeddingsDB = new EmbeddingsDB();
+        embeddingsDB = new EmbeddingsDB(embeddingsDbPath);
         logger.log(`[MCP Server] Embeddings database initialized`);
 
         // Initialize Ollama client

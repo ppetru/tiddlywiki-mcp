@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SyncWorker } from '../../../src/embeddings/sync-worker.js';
 import { EmbeddingsDB } from '../../../src/embeddings/database.js';
 import { OllamaClient } from '../../../src/embeddings/ollama-client.js';
@@ -186,5 +186,186 @@ describe('SyncWorker - Re-indexing Bug', () => {
 
     // Should only have indexed 1 tiddler
     expect(db.getIndexedTiddlersCount()).toBe(1);
+  });
+
+  it('should mark empty tiddlers with status="empty" and not re-process them', async () => {
+    // Mock an empty tiddler (has title but no text content)
+    const emptyTiddler: Tiddler = {
+      title: 'Empty Tiddler',
+      text: '', // Empty text
+      created: '20250101000000000',
+      modified: '20250101120000000'
+    };
+
+    const { queryTiddlers } = await import('../../../src/tiddlywiki-http.js');
+    vi.mocked(queryTiddlers).mockResolvedValue([emptyTiddler]);
+
+    vi.spyOn(ollama, 'healthCheck').mockResolvedValue(true);
+
+    syncWorker = new SyncWorker(db, ollama, { enabled: false });
+
+    // FIRST SYNC: Should mark as empty
+    await syncWorker.forceSync();
+
+    // Verify it was marked as empty
+    const syncStatus = db.getSyncStatus('Empty Tiddler');
+    expect(syncStatus).toBeDefined();
+    expect(syncStatus!.status).toBe('empty');
+    expect(syncStatus!.total_chunks).toBe(0);
+
+    // Clear mock history
+    vi.mocked(queryTiddlers).mockClear();
+
+    // SECOND SYNC: Should NOT re-process the empty tiddler
+    await syncWorker.forceSync();
+
+    // Verify it wasn't re-indexed (no calls to fetch full content)
+    const reIndexCalls = vi.mocked(queryTiddlers).mock.calls.filter(
+      call => call[0].includes('[title[Empty Tiddler]]') && call[1] === true
+    );
+    expect(reIndexCalls.length).toBe(0);
+  });
+
+  it('should re-index empty tiddlers if modified timestamp changes', async () => {
+    // Start with empty tiddler
+    const emptyTiddler: Tiddler = {
+      title: 'Empty Tiddler',
+      text: '',
+      created: '20250101000000000',
+      modified: '20250101120000000'
+    };
+
+    const { queryTiddlers } = await import('../../../src/tiddlywiki-http.js');
+    vi.mocked(queryTiddlers).mockResolvedValue([emptyTiddler]);
+
+    vi.spyOn(ollama, 'healthCheck').mockResolvedValue(true);
+
+    syncWorker = new SyncWorker(db, ollama, { enabled: false });
+
+    // FIRST SYNC: Mark as empty
+    await syncWorker.forceSync();
+
+    const firstStatus = db.getSyncStatus('Empty Tiddler');
+    expect(firstStatus!.status).toBe('empty');
+    expect(firstStatus!.last_modified).toBe('20250101120000000');
+
+    // Update tiddler with new content and modified timestamp
+    const updatedTiddler: Tiddler = {
+      title: 'Empty Tiddler',
+      text: 'Now has content!',
+      created: '20250101000000000',
+      modified: '20250102120000000' // Changed timestamp
+    };
+
+    vi.mocked(queryTiddlers).mockResolvedValue([updatedTiddler]);
+    vi.spyOn(ollama, 'chunkText').mockReturnValue(['Now has content!']);
+    vi.spyOn(ollama, 'generateEmbeddings').mockResolvedValue([
+      Array(768).fill(0.1)
+    ]);
+
+    // SECOND SYNC: Should re-index because modified changed
+    await syncWorker.forceSync();
+
+    const secondStatus = db.getSyncStatus('Empty Tiddler');
+    expect(secondStatus!.status).toBe('indexed');
+    expect(secondStatus!.last_modified).toBe('20250102120000000');
+    expect(secondStatus!.total_chunks).toBe(1);
+  });
+
+  it('should mark tiddlers with status="error" when embedding generation fails', async () => {
+    // Mock a large tiddler that will cause Ollama API error
+    const largeTiddler: Tiddler = {
+      title: 'Oversized Tiddler',
+      text: 'Very large content that exceeds context window...',
+      created: '20250101000000000',
+      modified: '20250101120000000'
+    };
+
+    const { queryTiddlers } = await import('../../../src/tiddlywiki-http.js');
+    vi.mocked(queryTiddlers).mockResolvedValue([largeTiddler]);
+
+    vi.spyOn(ollama, 'healthCheck').mockResolvedValue(true);
+    vi.spyOn(ollama, 'chunkText').mockReturnValue(['Very large content that exceeds context window...']);
+
+    // Mock Ollama API error (context length exceeded)
+    vi.spyOn(ollama, 'generateDocumentEmbeddings').mockRejectedValue(
+      new Error('Ollama API error (400): {"error":"the input length exceeds the context length"}')
+    );
+
+    syncWorker = new SyncWorker(db, ollama, { enabled: false });
+
+    // FIRST SYNC: Should mark as error
+    await syncWorker.forceSync();
+
+    // Verify it was marked as error
+    const syncStatus = db.getSyncStatus('Oversized Tiddler');
+    expect(syncStatus).toBeDefined();
+    expect(syncStatus!.status).toBe('error');
+    expect(syncStatus!.error_message).toContain('input length exceeds');
+    expect(syncStatus!.total_chunks).toBe(0);
+
+    // Clear mock history
+    vi.mocked(queryTiddlers).mockClear();
+
+    // SECOND SYNC (immediately after): Should NOT retry yet (24h not passed)
+    await syncWorker.forceSync();
+
+    // Verify it wasn't re-indexed
+    const reIndexCalls = vi.mocked(queryTiddlers).mock.calls.filter(
+      call => call[0].includes('[title[Oversized Tiddler]]') && call[1] === true
+    );
+    expect(reIndexCalls.length).toBe(0);
+  });
+
+  it('should retry error tiddlers after 24 hours', async () => {
+    // Manually create a sync status entry with error from 25 hours ago
+    const RETRY_ERROR_AFTER_MS = 24 * 60 * 60 * 1000;
+    const twentyFiveHoursAgo = new Date(Date.now() - RETRY_ERROR_AFTER_MS - 3600000);
+
+    // Insert old error status directly into DB
+    db.updateSyncStatus(
+      'Old Error Tiddler',
+      '20250101120000000',
+      0,
+      'error',
+      'Previous error message'
+    );
+
+    // Manually update the last_indexed timestamp to 25 hours ago
+    // (normally we'd use time-travel, but for this test we'll hack the DB)
+    const updateStmt = db['db'].prepare(`
+      UPDATE sync_status
+      SET last_indexed = datetime(?, 'unixepoch')
+      WHERE tiddler_title = ?
+    `);
+    updateStmt.run(Math.floor(twentyFiveHoursAgo.getTime() / 1000), 'Old Error Tiddler');
+
+    // Mock the tiddler in TiddlyWiki (now it will succeed)
+    const tiddler: Tiddler = {
+      title: 'Old Error Tiddler',
+      text: 'Content that now works',
+      created: '20250101000000000',
+      modified: '20250101120000000' // Same timestamp as before
+    };
+
+    const { queryTiddlers } = await import('../../../src/tiddlywiki-http.js');
+    vi.mocked(queryTiddlers).mockResolvedValue([tiddler]);
+
+    vi.spyOn(ollama, 'healthCheck').mockResolvedValue(true);
+    vi.spyOn(ollama, 'chunkText').mockReturnValue(['Content that now works']);
+    vi.spyOn(ollama, 'generateDocumentEmbeddings').mockResolvedValue([
+      Array(768).fill(0.1)
+    ]);
+
+    syncWorker = new SyncWorker(db, ollama, { enabled: false });
+
+    // SYNC: Should retry because >24h since last error
+    await syncWorker.forceSync();
+
+    // Verify it was re-indexed and marked as successful
+    const syncStatus = db.getSyncStatus('Old Error Tiddler');
+    expect(syncStatus!.status).toBe('indexed');
+    expect(syncStatus!.error_message).toBeNull();
+    expect(syncStatus!.total_chunks).toBe(1);
   });
 });

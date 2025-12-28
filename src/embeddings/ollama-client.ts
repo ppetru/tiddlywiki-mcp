@@ -1,12 +1,44 @@
 import { encode } from 'gpt-tokenizer';
 import * as logger from '../logger.js';
 
+// Timeout configuration (in milliseconds)
+const TIMEOUT_EMBEDDINGS = 120000;  // 120 seconds for embeddings (can be slow)
+const TIMEOUT_HEALTH = 10000;        // 10 seconds for health check
+
 interface OllamaEmbedResponse {
   model: string;
   embeddings: number[][];
   total_duration?: number;
   load_duration?: number;
   prompt_eval_count?: number;
+}
+
+/**
+ * Fetch with timeout using AbortController
+ */
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+  operationName: string
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    logger.warn(`[Ollama] ${operationName} timed out after ${timeoutMs}ms`);
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`${operationName} timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export class OllamaClient {
@@ -26,21 +58,30 @@ export class OllamaClient {
       return [];
     }
 
-    const response = await fetch(`${this.baseUrl}/api/embed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        input: texts
-      })
-    });
+    logger.log(`[Ollama] generateEmbeddings: ${texts.length} text(s)`);
+
+    const response = await fetchWithTimeout(
+      `${this.baseUrl}/api/embed`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: this.model,
+          input: texts
+        })
+      },
+      TIMEOUT_EMBEDDINGS,
+      `generateEmbeddings(${texts.length} texts)`
+    );
 
     if (!response.ok) {
       const errorText = await response.text();
+      logger.error(`[Ollama] generateEmbeddings failed: ${response.status} - ${errorText}`);
       throw new Error(`Ollama API error (${response.status}): ${errorText}`);
     }
 
     const data: OllamaEmbedResponse = await response.json();
+    logger.log(`[Ollama] generateEmbeddings: OK (${data.embeddings.length} embeddings)`);
     return data.embeddings;
   }
 
@@ -78,12 +119,20 @@ export class OllamaClient {
 
   async healthCheck(): Promise<boolean> {
     try {
-      const response = await fetch(this.baseUrl, {
-        method: 'GET'
-      });
+      logger.log(`[Ollama] healthCheck: ${this.baseUrl}`);
+
+      const response = await fetchWithTimeout(
+        this.baseUrl,
+        { method: 'GET' },
+        TIMEOUT_HEALTH,
+        'healthCheck'
+      );
+
+      logger.log(`[Ollama] healthCheck: ${response.ok ? 'OK' : 'FAILED'} (${response.status})`);
       return response.ok;
     } catch (error) {
-      logger.error('Ollama health check failed:', error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error(`[Ollama] healthCheck failed: ${errMsg}`);
       return false;
     }
   }

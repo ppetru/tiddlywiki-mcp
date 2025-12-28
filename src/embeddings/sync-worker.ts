@@ -144,6 +144,7 @@ export class SyncWorker {
 
       // Determine which tiddlers need indexing
       const tiddlersToIndex: Tiddler[] = [];
+      const RETRY_ERROR_AFTER_MS = 24 * 60 * 60 * 1000; // 24 hours
 
       for (const tiddler of validTiddlers) {
         const syncStatus = this.db.getSyncStatus(tiddler.title);
@@ -151,14 +152,34 @@ export class SyncWorker {
         // Normalize undefined modified to sentinel value for consistent comparison
         const tiddlerModified = tiddler.modified || MISSING_TIMESTAMP;
 
-        // Index if never indexed OR if modified timestamp changed
-        if (!syncStatus || syncStatus.last_modified !== tiddlerModified) {
-          // Debug logging
-          if (syncStatus) {
-            logger.log(`[SyncWorker] Re-indexing ${tiddler.title}: stored="${syncStatus.last_modified}" vs current="${tiddlerModified}"`);
-          } else {
-            logger.log(`[SyncWorker] Indexing NEW tiddler: ${tiddler.title} (modified: ${tiddlerModified})`);
+        // Decision logic for whether to index this tiddler
+        let shouldIndex = false;
+        let reason = '';
+
+        if (!syncStatus) {
+          // Never indexed before
+          shouldIndex = true;
+          reason = 'NEW tiddler';
+        } else if (syncStatus.last_modified !== tiddlerModified) {
+          // Modified timestamp changed - always re-index
+          shouldIndex = true;
+          reason = `modified timestamp changed (stored="${syncStatus.last_modified}" vs current="${tiddlerModified}")`;
+        } else if (syncStatus.status === 'error') {
+          // For error status, retry after 24 hours
+          const lastIndexedTime = new Date(syncStatus.last_indexed).getTime();
+          const now = Date.now();
+          const timeSinceError = now - lastIndexedTime;
+
+          if (timeSinceError > RETRY_ERROR_AFTER_MS) {
+            shouldIndex = true;
+            reason = `retrying after error (${(timeSinceError / (1000 * 60 * 60)).toFixed(1)}h since last attempt)`;
           }
+        }
+        // Note: Empty tiddlers (status='empty') are only re-indexed if modified timestamp changes (handled above)
+        // Successful tiddlers (status='indexed') are only re-indexed if modified timestamp changes (handled above)
+
+        if (shouldIndex) {
+          logger.log(`[SyncWorker] Indexing ${tiddler.title}: ${reason}`);
           tiddlersToIndex.push(tiddler);
         }
       }
@@ -170,21 +191,33 @@ export class SyncWorker {
 
       logger.log(`[SyncWorker] Indexing ${tiddlersToIndex.length} tiddlers...`);
 
-      // Process tiddlers in batches
-      let indexed = 0;
+      // Process tiddlers in batches and track results
+      const stats = {
+        indexed: 0,
+        empty: 0,
+        error: 0
+      };
+
       for (let i = 0; i < tiddlersToIndex.length; i += this.config.batchSize) {
         const batch = tiddlersToIndex.slice(i, i + this.config.batchSize);
 
-        await Promise.all(
+        const results = await Promise.all(
           batch.map(tiddler => this.indexTiddler(tiddler))
         );
 
-        indexed += batch.length;
-        logger.log(`[SyncWorker] Progress: ${indexed}/${tiddlersToIndex.length} tiddlers indexed`);
+        // Count results by status
+        for (const status of results) {
+          if (status === 'indexed') stats.indexed++;
+          else if (status === 'empty') stats.empty++;
+          else if (status === 'error') stats.error++;
+        }
+
+        const processed = i + batch.length;
+        logger.log(`[SyncWorker] Progress: ${processed}/${tiddlersToIndex.length} tiddlers processed`);
       }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      logger.log(`[SyncWorker] Sync cycle completed in ${duration}s. Indexed ${tiddlersToIndex.length} tiddlers.`);
+      logger.log(`[SyncWorker] Sync cycle completed in ${duration}s. Results: ${stats.indexed} indexed, ${stats.empty} empty, ${stats.error} errors`);
     } catch (error) {
       logger.error('[SyncWorker] Sync cycle error:', error);
       throw error;
@@ -195,8 +228,9 @@ export class SyncWorker {
 
   /**
    * Index a single tiddler
+   * Returns status: 'indexed', 'empty', or 'error'
    */
-  private async indexTiddler(tiddlerMetadata: Tiddler): Promise<void> {
+  private async indexTiddler(tiddlerMetadata: Tiddler): Promise<string> {
     try {
       // Fetch full tiddler content
       const [fullTiddler] = await queryTiddlers(
@@ -205,8 +239,18 @@ export class SyncWorker {
       );
 
       if (!fullTiddler || !fullTiddler.text) {
-        logger.warn(`[SyncWorker] Tiddler ${tiddlerMetadata.title} has no text, skipping`);
-        return;
+        logger.warn(`[SyncWorker] Tiddler ${tiddlerMetadata.title} has no text, marking as empty to avoid re-processing`);
+
+        // Mark as empty to prevent re-indexing on every sync cycle
+        this.db.updateSyncStatus(
+          tiddlerMetadata.title,
+          tiddlerMetadata.modified || MISSING_TIMESTAMP,
+          0, // No chunks
+          'empty',
+          null
+        );
+
+        return 'empty';
       }
 
       // Delete existing embeddings for this tiddler
@@ -215,36 +259,59 @@ export class SyncWorker {
       // Chunk the text if needed
       const chunks = this.ollama.chunkText(fullTiddler.text);
 
-      // Generate embeddings for all chunks with search_document prefix
-      const embeddings = await this.ollama.generateDocumentEmbeddings(chunks);
+      try {
+        // Generate embeddings for all chunks with search_document prefix
+        const embeddings = await this.ollama.generateDocumentEmbeddings(chunks);
 
-      // Store embeddings
-      for (let i = 0; i < chunks.length; i++) {
-        this.db.insertEmbedding(
+        // Store embeddings
+        for (let i = 0; i < chunks.length; i++) {
+          this.db.insertEmbedding(
+            fullTiddler.title,
+            i, // chunk_id
+            embeddings[i],
+            chunks[i],
+            {
+              created: fullTiddler.created || '',
+              modified: fullTiddler.modified || '',
+              tags: fullTiddler.tags || ''
+            }
+          );
+        }
+
+        // Update sync status with success
+        this.db.updateSyncStatus(
           fullTiddler.title,
-          i, // chunk_id
-          embeddings[i],
-          chunks[i],
-          {
-            created: fullTiddler.created || '',
-            modified: fullTiddler.modified || '',
-            tags: fullTiddler.tags || ''
-          }
+          fullTiddler.modified || MISSING_TIMESTAMP,
+          chunks.length,
+          'indexed',
+          null
         );
+
+        const tokenCount = this.ollama.countTokens(fullTiddler.text);
+        logger.log(`[SyncWorker] Indexed ${fullTiddler.title} (${tokenCount} tokens, ${chunks.length} chunks)`);
+
+        return 'indexed';
+      } catch (embeddingError: any) {
+        // Handle Ollama API errors (e.g., context length exceeded)
+        const errorMessage = embeddingError?.message || String(embeddingError);
+        logger.error(`[SyncWorker] Failed to generate embeddings for ${fullTiddler.title}: ${errorMessage}`);
+
+        // Mark as error to prevent infinite retry loop
+        this.db.updateSyncStatus(
+          fullTiddler.title,
+          fullTiddler.modified || MISSING_TIMESTAMP,
+          0, // No chunks successfully stored
+          'error',
+          errorMessage
+        );
+
+        // Don't re-throw - continue processing other tiddlers
+        return 'error';
       }
-
-      // Update sync status
-      this.db.updateSyncStatus(
-        fullTiddler.title,
-        fullTiddler.modified || MISSING_TIMESTAMP,
-        chunks.length
-      );
-
-      const tokenCount = this.ollama.countTokens(fullTiddler.text);
-      logger.log(`[SyncWorker] Indexed ${fullTiddler.title} (${tokenCount} tokens, ${chunks.length} chunks)`);
     } catch (error) {
       logger.error(`[SyncWorker] Error indexing tiddler ${tiddlerMetadata.title}:`, error);
-      throw error;
+      // Return error status instead of throwing to allow batch processing to continue
+      return 'error';
     }
   }
 

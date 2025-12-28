@@ -24,7 +24,7 @@
   "author": "ppetru",
   "license": "MIT",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4",
+    "@modelcontextprotocol/sdk": "^1.25.1",
     "better-sqlite3": "^12.4.1",
     "diff": "^5.2.0",
     "express": "^4.21.2",

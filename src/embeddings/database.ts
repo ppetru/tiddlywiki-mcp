@@ -22,6 +22,8 @@ export interface SyncStatus {
   last_modified: string;
   last_indexed: string;
   total_chunks: number;
+  status: string;
+  error_message: string | null;
 }
 
 export class EmbeddingsDB {
@@ -40,6 +42,9 @@ export class EmbeddingsDB {
 
     // Migrate any existing empty timestamps to sentinel value
     this.migrateEmptyTimestamps();
+
+    // Add status tracking columns if they don't exist
+    this.migrateAddStatusColumns();
   }
 
   private initSchema() {
@@ -92,6 +97,27 @@ export class EmbeddingsDB {
 
     if (result.changes > 0) {
       console.log(`[DB Migration] Updated ${result.changes} entries with missing timestamps`);
+    }
+  }
+
+  /**
+   * Add status and error_message columns to sync_status table
+   * Enables tracking of empty/error tiddlers to prevent infinite re-indexing
+   */
+  private migrateAddStatusColumns(): void {
+    // Check if status column exists
+    const tableInfo = this.db.prepare("PRAGMA table_info(sync_status)").all() as Array<{ name: string }>;
+    const hasStatus = tableInfo.some(col => col.name === 'status');
+
+    if (!hasStatus) {
+      console.log('[DB Migration] Adding status and error_message columns to sync_status table');
+
+      this.db.exec(`
+        ALTER TABLE sync_status ADD COLUMN status TEXT NOT NULL DEFAULT 'indexed';
+        ALTER TABLE sync_status ADD COLUMN error_message TEXT;
+      `);
+
+      console.log('[DB Migration] Status columns added successfully');
     }
   }
 
@@ -149,18 +175,24 @@ export class EmbeddingsDB {
     return stmt.all(Buffer.from(embeddingArray.buffer), limit) as SearchResult[];
   }
 
-  updateSyncStatus(tiddlerTitle: string, lastModified: string, totalChunks: number): void {
+  updateSyncStatus(
+    tiddlerTitle: string,
+    lastModified: string,
+    totalChunks: number,
+    status: string = 'indexed',
+    errorMessage: string | null = null
+  ): void {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO sync_status(tiddler_title, last_modified, last_indexed, total_chunks)
-      VALUES (?, ?, datetime('now'), ?)
+      INSERT OR REPLACE INTO sync_status(tiddler_title, last_modified, last_indexed, total_chunks, status, error_message)
+      VALUES (?, ?, datetime('now'), ?, ?, ?)
     `);
 
-    stmt.run(tiddlerTitle, lastModified, totalChunks);
+    stmt.run(tiddlerTitle, lastModified, totalChunks, status, errorMessage);
   }
 
   getSyncStatus(tiddlerTitle: string): SyncStatus | null {
     const stmt = this.db.prepare(`
-      SELECT tiddler_title, last_modified, last_indexed, total_chunks
+      SELECT tiddler_title, last_modified, last_indexed, total_chunks, status, error_message
       FROM sync_status
       WHERE tiddler_title = ?
     `);
@@ -170,7 +202,7 @@ export class EmbeddingsDB {
 
   getAllSyncStatuses(): SyncStatus[] {
     const stmt = this.db.prepare(`
-      SELECT tiddler_title, last_modified, last_indexed, total_chunks
+      SELECT tiddler_title, last_modified, last_indexed, total_chunks, status, error_message
       FROM sync_status
       ORDER BY tiddler_title
     `);
