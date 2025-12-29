@@ -1,5 +1,6 @@
 import { encode } from 'gpt-tokenizer';
 import * as logger from '../logger.js';
+import { getServiceUrl } from '../service-discovery.js';
 
 // Timeout configuration (in milliseconds)
 const TIMEOUT_EMBEDDINGS = 120000; // 120 seconds for embeddings (can be slow)
@@ -42,15 +43,28 @@ async function fetchWithTimeout(
 }
 
 export class OllamaClient {
-  private baseUrl: string;
+  private serviceUrl: string;
   private model: string;
+  private resolvedBaseUrl: string | null = null;
 
   constructor(
-    baseUrl: string = process.env.OLLAMA_URL || 'http://localhost:11434',
+    serviceUrl: string = process.env.OLLAMA_URL || 'http://localhost:11434',
     model: string = process.env.OLLAMA_MODEL || 'nomic-embed-text'
   ) {
-    this.baseUrl = baseUrl;
+    this.serviceUrl = serviceUrl;
     this.model = model;
+  }
+
+  /**
+   * Get the resolved base URL, using service discovery if needed.
+   * Caches the result for subsequent calls.
+   */
+  private async getBaseUrl(): Promise<string> {
+    if (this.resolvedBaseUrl) {
+      return this.resolvedBaseUrl;
+    }
+    this.resolvedBaseUrl = await getServiceUrl(this.serviceUrl, '');
+    return this.resolvedBaseUrl;
   }
 
   async generateEmbeddings(texts: string[]): Promise<number[][]> {
@@ -58,10 +72,11 @@ export class OllamaClient {
       return [];
     }
 
+    const baseUrl = await this.getBaseUrl();
     logger.log(`[Ollama] generateEmbeddings: ${texts.length} text(s)`);
 
     const response = await fetchWithTimeout(
-      `${this.baseUrl}/api/embed`,
+      `${baseUrl}/api/embed`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -119,10 +134,11 @@ export class OllamaClient {
 
   async healthCheck(): Promise<boolean> {
     try {
-      logger.log(`[Ollama] healthCheck: ${this.baseUrl}`);
+      const baseUrl = await this.getBaseUrl();
+      logger.log(`[Ollama] healthCheck: ${baseUrl}`);
 
       const response = await fetchWithTimeout(
-        this.baseUrl,
+        baseUrl,
         { method: 'GET' },
         TIMEOUT_HEALTH,
         'healthCheck'
