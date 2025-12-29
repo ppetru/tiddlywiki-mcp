@@ -2,8 +2,8 @@ import { encode } from 'gpt-tokenizer';
 import * as logger from '../logger.js';
 
 // Timeout configuration (in milliseconds)
-const TIMEOUT_EMBEDDINGS = 120000;  // 120 seconds for embeddings (can be slow)
-const TIMEOUT_HEALTH = 10000;        // 10 seconds for health check
+const TIMEOUT_EMBEDDINGS = 120000; // 120 seconds for embeddings (can be slow)
+const TIMEOUT_HEALTH = 10000; // 10 seconds for health check
 
 interface OllamaEmbedResponse {
   model: string;
@@ -46,8 +46,8 @@ export class OllamaClient {
   private model: string;
 
   constructor(
-    baseUrl: string = 'http://ollama.service.consul:11434',
-    model: string = 'nomic-embed-text'
+    baseUrl: string = process.env.OLLAMA_URL || 'http://localhost:11434',
+    model: string = process.env.OLLAMA_MODEL || 'nomic-embed-text'
   ) {
     this.baseUrl = baseUrl;
     this.model = model;
@@ -67,8 +67,8 @@ export class OllamaClient {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: this.model,
-          input: texts
-        })
+          input: texts,
+        }),
       },
       TIMEOUT_EMBEDDINGS,
       `generateEmbeddings(${texts.length} texts)`
@@ -104,7 +104,7 @@ export class OllamaClient {
    * Uses "search_document:" prefix as required by nomic-embed-text for RAG.
    */
   async generateDocumentEmbeddings(texts: string[]): Promise<number[][]> {
-    const prefixedTexts = texts.map(text => `search_document: ${text}`);
+    const prefixedTexts = texts.map((text) => `search_document: ${text}`);
     return this.generateEmbeddings(prefixedTexts);
   }
 
@@ -153,7 +153,7 @@ export class OllamaClient {
     const paragraphs = text.split(/\n\n+/);
     const chunks: string[] = [];
     let currentChunk = '';
-    let currentTokens = 0;
+    let _currentTokens = 0;
 
     for (const para of paragraphs) {
       const paraTokens = encode(para);
@@ -164,7 +164,7 @@ export class OllamaClient {
       if (testTokenCount > maxTokens && currentChunk) {
         chunks.push(currentChunk.trim());
         currentChunk = para;
-        currentTokens = paraTokens.length;
+        _currentTokens = paraTokens.length;
       }
       // If a single paragraph is too large, split it by sentences
       else if (paraTokens.length > maxTokens) {
@@ -172,7 +172,7 @@ export class OllamaClient {
         if (currentChunk) {
           chunks.push(currentChunk.trim());
           currentChunk = '';
-          currentTokens = 0;
+          _currentTokens = 0;
         }
 
         // Split large paragraph by sentences
@@ -196,13 +196,13 @@ export class OllamaClient {
 
         if (sentenceChunk) {
           currentChunk = sentenceChunk;
-          currentTokens = encode(sentenceChunk).length;
+          _currentTokens = encode(sentenceChunk).length;
         }
       }
       // Otherwise, accumulate the paragraph
       else {
         currentChunk = testChunk;
-        currentTokens = testTokenCount;
+        _currentTokens = testTokenCount;
       }
     }
 
@@ -211,7 +211,7 @@ export class OllamaClient {
       chunks.push(currentChunk.trim());
     }
 
-    return chunks.filter(chunk => chunk.length > 0);
+    return chunks.filter((chunk) => chunk.length > 0);
   }
 
   /**

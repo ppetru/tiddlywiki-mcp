@@ -4,12 +4,12 @@
  * Provides HTTP-based access to TiddlyWiki server with proper metadata handling
  */
 
-import { getServiceUrl } from './consul.js';
+import { getServiceUrl } from './service-discovery.js';
 import * as logger from './logger.js';
 
 // Timeout configuration (in milliseconds)
-const TIMEOUT_READ = 30000;   // 30 seconds for read operations
-const TIMEOUT_WRITE = 60000;  // 60 seconds for write operations
+const TIMEOUT_READ = 30000; // 30 seconds for read operations
+const TIMEOUT_WRITE = 60000; // 60 seconds for write operations
 
 /**
  * Fetch with timeout using AbortController
@@ -54,7 +54,7 @@ export interface Tiddler {
 }
 
 export interface TiddlyWikiConfig {
-  consulService: string;
+  tiddlywikiUrl: string;
   authHeader: string;
   authUser: string;
 }
@@ -72,7 +72,7 @@ let pendingResolution: Promise<string> | null = null;
  */
 export function initTiddlyWiki(cfg: TiddlyWikiConfig): void {
   config = cfg;
-  logger.log('[TiddlyWiki HTTP] Initialized with service:', cfg.consulService);
+  logger.log('[TiddlyWiki HTTP] Initialized with URL:', cfg.tiddlywikiUrl);
 }
 
 /**
@@ -100,7 +100,7 @@ async function getBaseUrl(): Promise<string> {
   const now = Date.now();
 
   // Return cached value if still valid
-  if (baseUrlCache && (now - cacheTime) < CACHE_TTL) {
+  if (baseUrlCache && now - cacheTime < CACHE_TTL) {
     return baseUrlCache;
   }
 
@@ -112,7 +112,7 @@ async function getBaseUrl(): Promise<string> {
   // Start new resolution with mutex
   pendingResolution = (async () => {
     try {
-      const url = await getServiceUrl(config!.consulService, '');
+      const url = await getServiceUrl(config!.tiddlywikiUrl, '');
       baseUrlCache = url;
       cacheTime = Date.now();
       return url;
@@ -158,7 +158,9 @@ export async function queryTiddlers(
   const url = `${baseUrl}/recipes/default/tiddlers.json?filter=${encodedFilter}`;
 
   const filterPreview = filter.length > 80 ? filter.substring(0, 80) + '...' : filter;
-  logger.log(`[TiddlyWiki HTTP] queryTiddlers: filter="${filterPreview}" includeText=${includeText}`);
+  logger.log(
+    `[TiddlyWiki HTTP] queryTiddlers: filter="${filterPreview}" includeText=${includeText}`
+  );
 
   const response = await fetchWithTimeout(
     url,
@@ -169,11 +171,13 @@ export async function queryTiddlers(
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '(no body)');
-    logger.error(`[TiddlyWiki HTTP] queryTiddlers failed: ${response.status} ${response.statusText} - ${errorBody}`);
+    logger.error(
+      `[TiddlyWiki HTTP] queryTiddlers failed: ${response.status} ${response.statusText} - ${errorBody}`
+    );
     throw new Error(`Failed to query tiddlers: ${response.status} ${response.statusText}`);
   }
 
-  let tiddlers = await response.json() as Tiddler[];
+  let tiddlers = (await response.json()) as Tiddler[];
   logger.log(`[TiddlyWiki HTTP] queryTiddlers: ${tiddlers.length} tiddlers matched`);
 
   // Apply offset and limit BEFORE fetching full content (optimization)
@@ -186,16 +190,14 @@ export async function queryTiddlers(
     logger.log(`[TiddlyWiki HTTP] Fetching full content for ${tiddlers.length} tiddlers...`);
 
     // Use Promise.allSettled to avoid cascade failures
-    const results = await Promise.allSettled(
-      tiddlers.map(t => getTiddler(t.title))
-    );
+    const results = await Promise.allSettled(tiddlers.map((t) => getTiddler(t.title)));
 
     const successful = results
       .filter((r): r is PromiseFulfilledResult<Tiddler | null> => r.status === 'fulfilled')
-      .map(r => r.value)
+      .map((r) => r.value)
       .filter((t): t is Tiddler => t !== null);
 
-    const failed = results.filter(r => r.status === 'rejected').length;
+    const failed = results.filter((r) => r.status === 'rejected').length;
     if (failed > 0) {
       logger.warn(`[TiddlyWiki HTTP] ${failed}/${tiddlers.length} tiddlers failed to fetch`);
     }
@@ -232,12 +234,14 @@ export async function getTiddler(title: string): Promise<Tiddler | null> {
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '(no body)');
-    logger.error(`[TiddlyWiki HTTP] getTiddler failed: ${response.status} ${response.statusText} - ${errorBody}`);
+    logger.error(
+      `[TiddlyWiki HTTP] getTiddler failed: ${response.status} ${response.statusText} - ${errorBody}`
+    );
     throw new Error(`Failed to get tiddler "${title}": ${response.status} ${response.statusText}`);
   }
 
   logger.log(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}" OK`);
-  return await response.json() as Tiddler;
+  return (await response.json()) as Tiddler;
 }
 
 /**
@@ -251,8 +255,11 @@ export async function putTiddler(tiddler: Tiddler): Promise<void> {
   // Remove server-managed fields (but keep modified/modifier which we set explicitly)
   const { revision, bag, ...tiddlerFields } = tiddler;
 
-  const titlePreview = tiddler.title.length > 50 ? tiddler.title.substring(0, 50) + '...' : tiddler.title;
-  logger.log(`[TiddlyWiki HTTP] putTiddler: "${titlePreview}" (${JSON.stringify(tiddlerFields).length} bytes)`);
+  const titlePreview =
+    tiddler.title.length > 50 ? tiddler.title.substring(0, 50) + '...' : tiddler.title;
+  logger.log(
+    `[TiddlyWiki HTTP] putTiddler: "${titlePreview}" (${JSON.stringify(tiddlerFields).length} bytes)`
+  );
 
   const response = await fetchWithTimeout(
     url,
@@ -267,8 +274,12 @@ export async function putTiddler(tiddler: Tiddler): Promise<void> {
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '(no body)');
-    logger.error(`[TiddlyWiki HTTP] putTiddler failed: ${response.status} ${response.statusText} - ${errorBody}`);
-    throw new Error(`Failed to put tiddler "${tiddler.title}": ${response.status} ${response.statusText} - ${errorBody}`);
+    logger.error(
+      `[TiddlyWiki HTTP] putTiddler failed: ${response.status} ${response.statusText} - ${errorBody}`
+    );
+    throw new Error(
+      `Failed to put tiddler "${tiddler.title}": ${response.status} ${response.statusText} - ${errorBody}`
+    );
   }
 
   logger.log(`[TiddlyWiki HTTP] putTiddler: "${titlePreview}" OK (${response.status})`);
@@ -297,8 +308,12 @@ export async function deleteTiddler(title: string): Promise<void> {
 
   if (!response.ok) {
     const errorBody = await response.text().catch(() => '(no body)');
-    logger.error(`[TiddlyWiki HTTP] deleteTiddler failed: ${response.status} ${response.statusText} - ${errorBody}`);
-    throw new Error(`Failed to delete tiddler "${title}": ${response.status} ${response.statusText} - ${errorBody}`);
+    logger.error(
+      `[TiddlyWiki HTTP] deleteTiddler failed: ${response.status} ${response.statusText} - ${errorBody}`
+    );
+    throw new Error(
+      `Failed to delete tiddler "${title}": ${response.status} ${response.statusText} - ${errorBody}`
+    );
   }
 
   logger.log(`[TiddlyWiki HTTP] deleteTiddler: "${titlePreview}" OK (${response.status})`);
@@ -344,7 +359,11 @@ export function createTiddlerObject(
 /**
  * Update an existing tiddler while preserving metadata
  */
-export function updateTiddlerObject(current: Tiddler, updates: Partial<Tiddler>, modifier: string): Tiddler {
+export function updateTiddlerObject(
+  current: Tiddler,
+  updates: Partial<Tiddler>,
+  modifier: string
+): Tiddler {
   return {
     ...current,
     ...updates,

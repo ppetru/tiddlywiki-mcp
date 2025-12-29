@@ -158,13 +158,13 @@ describe('SyncWorker - Re-indexing Bug', () => {
     };
 
     const filesystemPath1: Tiddler = {
-      title: '/data/services/wiki/captainslog/tiddlers/$__StoryList.tid',
-      created: '20251118000000000'
+      title: '/path/to/wiki/tiddlers/$__StoryList.tid',
+      created: '20251118000000000',
     };
 
     const filesystemPath2: Tiddler = {
-      title: '/data/services/wiki/captainslog/tiddlers/$__StoryList_1.tid',
-      created: '20251118000000000'
+      title: '/path/to/wiki/tiddlers/$__StoryList_1.tid',
+      created: '20251118000000000',
     };
 
     const { queryTiddlers } = await import('../../../src/tiddlywiki-http.js');
@@ -181,8 +181,8 @@ describe('SyncWorker - Re-indexing Bug', () => {
 
     // Only the valid tiddler should be indexed
     expect(db.getSyncStatus('2025-11-18')).toBeDefined();
-    expect(db.getSyncStatus('/data/services/wiki/captainslog/tiddlers/$__StoryList.tid')).toBeUndefined();
-    expect(db.getSyncStatus('/data/services/wiki/captainslog/tiddlers/$__StoryList_1.tid')).toBeUndefined();
+    expect(db.getSyncStatus('/path/to/wiki/tiddlers/$__StoryList.tid')).toBeUndefined();
+    expect(db.getSyncStatus('/path/to/wiki/tiddlers/$__StoryList_1.tid')).toBeUndefined();
 
     // Should only have indexed 1 tiddler
     expect(db.getIndexedTiddlersCount()).toBe(1);

@@ -148,7 +148,7 @@ describe('MCP Server Concurrency', () => {
       console.warn(`
 ⚠️  MCP server not running at ${SERVER_URL}
     To run these tests, start the server first:
-    cd /data/services/tiddlywiki-mcp && npm run build && node dist/index.js
+    npm run build && TIDDLYWIKI_URL=http://localhost:8080 node dist/index.js
 
     Or set MCP_TEST_URL environment variable to point to a running server.
 `);

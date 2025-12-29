@@ -1,0 +1,23 @@
+# ABOUTME: Pre-commit hook configuration using lefthook
+# ABOUTME: Runs formatting check, linting, tests, and type checking before commits
+
+pre-commit:
+  parallel: false
+  commands:
+    format-check:
+      glob: "*.{ts,js,json}"
+      run: npm run format:check
+      fail_text: "Formatting check failed. Run 'npm run format' to fix."
+
+    lint:
+      glob: "*.ts"
+      run: npm run lint
+      fail_text: "Linting failed. Run 'npm run lint:fix' to fix."
+
+    test:
+      run: npm test -- --run
+      fail_text: "Tests failed. Fix the failing tests before committing."
+
+    typecheck:
+      run: npx tsc --noEmit
+      fail_text: "TypeScript type checking failed. Fix the type errors before committing."

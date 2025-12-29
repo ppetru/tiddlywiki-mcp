@@ -30,7 +30,7 @@ export class EmbeddingsDB {
   private db: Database.Database;
   private dbPath: string;
 
-  constructor(dbPath: string = '/data/services/tiddlywiki-mcp/embeddings.db') {
+  constructor(dbPath: string = process.env.EMBEDDINGS_DB_PATH || './embeddings.db') {
     this.dbPath = dbPath;
     this.db = new Database(dbPath);
 
@@ -106,8 +106,10 @@ export class EmbeddingsDB {
    */
   private migrateAddStatusColumns(): void {
     // Check if status column exists
-    const tableInfo = this.db.prepare("PRAGMA table_info(sync_status)").all() as Array<{ name: string }>;
-    const hasStatus = tableInfo.some(col => col.name === 'status');
+    const tableInfo = this.db.prepare('PRAGMA table_info(sync_status)').all() as Array<{
+      name: string;
+    }>;
+    const hasStatus = tableInfo.some((col) => col.name === 'status');
 
     if (!hasStatus) {
       console.log('[DB Migration] Adding status and error_message columns to sync_status table');
@@ -215,15 +217,18 @@ export class EmbeddingsDB {
       return [];
     }
 
-    const placeholders = tiddlerTitles.map(() => '?').join(',');
+    const _placeholders = tiddlerTitles.map(() => '?').join(',');
     const stmt = this.db.prepare(`
       SELECT ? as title
-      FROM (SELECT ? as title ${tiddlerTitles.slice(1).map(() => 'UNION ALL SELECT ?').join(' ')})
+      FROM (SELECT ? as title ${tiddlerTitles
+        .slice(1)
+        .map(() => 'UNION ALL SELECT ?')
+        .join(' ')})
       WHERE title NOT IN (SELECT tiddler_title FROM sync_status)
     `);
 
     const results = stmt.all(...tiddlerTitles) as Array<{ title: string }>;
-    return results.map(r => r.title);
+    return results.map((r) => r.title);
   }
 
   getOutdatedTiddlers(tiddlersWithModified: Array<{ title: string; modified: string }>): string[] {

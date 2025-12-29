@@ -158,6 +158,6 @@ Last 5 non-draft journal entries mentioning "exercise" from the past 2 weeks
  */
 export function getFilterReference(): { content: string } {
   return {
-    content: FILTER_REFERENCE
+    content: FILTER_REFERENCE,
   };
 }

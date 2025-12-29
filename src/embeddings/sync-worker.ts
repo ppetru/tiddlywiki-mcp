@@ -21,17 +21,13 @@ export class SyncWorker {
   private isRunning: boolean = false;
   private isSyncing: boolean = false;
 
-  constructor(
-    db: EmbeddingsDB,
-    ollama: OllamaClient,
-    config: Partial<SyncWorkerConfig> = {}
-  ) {
+  constructor(db: EmbeddingsDB, ollama: OllamaClient, config: Partial<SyncWorkerConfig> = {}) {
     this.db = db;
     this.ollama = ollama;
     this.config = {
       syncIntervalMs: config.syncIntervalMs || 5 * 60 * 1000, // 5 minutes
       batchSize: config.batchSize || 5,
-      enabled: config.enabled ?? true
+      enabled: config.enabled ?? true,
     };
   }
 
@@ -59,13 +55,13 @@ export class SyncWorker {
     }
 
     // Run initial sync (non-blocking)
-    this.runSync().catch(error => {
+    this.runSync().catch((error) => {
       logger.error('[SyncWorker] Initial sync error:', error);
     });
 
     // Schedule periodic syncs
     this.intervalId = setInterval(() => {
-      this.runSync().catch(error => {
+      this.runSync().catch((error) => {
         logger.error('[SyncWorker] Periodic sync error:', error);
       });
     }, this.config.syncIntervalMs);
@@ -102,7 +98,7 @@ export class SyncWorker {
       indexedTiddlers: this.db.getIndexedTiddlersCount(),
       totalEmbeddings: this.db.getEmbeddingsCount(),
       syncInterval: this.config.syncIntervalMs / 1000,
-      enabled: this.config.enabled
+      enabled: this.config.enabled,
     };
   }
 
@@ -136,11 +132,13 @@ export class SyncWorker {
 
       // Filter out filesystem paths (un-imported .tid files)
       // Real tiddler titles don't contain full filesystem paths
-      const validTiddlers = allTiddlers.filter(t =>
-        !t.title.startsWith('/') && !t.title.includes('.tid')
+      const validTiddlers = allTiddlers.filter(
+        (t) => !t.title.startsWith('/') && !t.title.includes('.tid')
       );
 
-      logger.log(`[SyncWorker] Found ${validTiddlers.length} total tiddlers (${allTiddlers.length - validTiddlers.length} filesystem paths filtered)`);
+      logger.log(
+        `[SyncWorker] Found ${validTiddlers.length} total tiddlers (${allTiddlers.length - validTiddlers.length} filesystem paths filtered)`
+      );
 
       // Determine which tiddlers need indexing
       const tiddlersToIndex: Tiddler[] = [];
@@ -195,15 +193,13 @@ export class SyncWorker {
       const stats = {
         indexed: 0,
         empty: 0,
-        error: 0
+        error: 0,
       };
 
       for (let i = 0; i < tiddlersToIndex.length; i += this.config.batchSize) {
         const batch = tiddlersToIndex.slice(i, i + this.config.batchSize);
 
-        const results = await Promise.all(
-          batch.map(tiddler => this.indexTiddler(tiddler))
-        );
+        const results = await Promise.all(batch.map((tiddler) => this.indexTiddler(tiddler)));
 
         // Count results by status
         for (const status of results) {
@@ -213,11 +209,15 @@ export class SyncWorker {
         }
 
         const processed = i + batch.length;
-        logger.log(`[SyncWorker] Progress: ${processed}/${tiddlersToIndex.length} tiddlers processed`);
+        logger.log(
+          `[SyncWorker] Progress: ${processed}/${tiddlersToIndex.length} tiddlers processed`
+        );
       }
 
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      logger.log(`[SyncWorker] Sync cycle completed in ${duration}s. Results: ${stats.indexed} indexed, ${stats.empty} empty, ${stats.error} errors`);
+      logger.log(
+        `[SyncWorker] Sync cycle completed in ${duration}s. Results: ${stats.indexed} indexed, ${stats.empty} empty, ${stats.error} errors`
+      );
     } catch (error) {
       logger.error('[SyncWorker] Sync cycle error:', error);
       throw error;
@@ -239,7 +239,9 @@ export class SyncWorker {
       );
 
       if (!fullTiddler || !fullTiddler.text) {
-        logger.warn(`[SyncWorker] Tiddler ${tiddlerMetadata.title} has no text, marking as empty to avoid re-processing`);
+        logger.warn(
+          `[SyncWorker] Tiddler ${tiddlerMetadata.title} has no text, marking as empty to avoid re-processing`
+        );
 
         // Mark as empty to prevent re-indexing on every sync cycle
         this.db.updateSyncStatus(
@@ -273,7 +275,7 @@ export class SyncWorker {
             {
               created: fullTiddler.created || '',
               modified: fullTiddler.modified || '',
-              tags: fullTiddler.tags || ''
+              tags: fullTiddler.tags || '',
             }
           );
         }
@@ -288,13 +290,17 @@ export class SyncWorker {
         );
 
         const tokenCount = this.ollama.countTokens(fullTiddler.text);
-        logger.log(`[SyncWorker] Indexed ${fullTiddler.title} (${tokenCount} tokens, ${chunks.length} chunks)`);
+        logger.log(
+          `[SyncWorker] Indexed ${fullTiddler.title} (${tokenCount} tokens, ${chunks.length} chunks)`
+        );
 
         return 'indexed';
       } catch (embeddingError: any) {
         // Handle Ollama API errors (e.g., context length exceeded)
         const errorMessage = embeddingError?.message || String(embeddingError);
-        logger.error(`[SyncWorker] Failed to generate embeddings for ${fullTiddler.title}: ${errorMessage}`);
+        logger.error(
+          `[SyncWorker] Failed to generate embeddings for ${fullTiddler.title}: ${errorMessage}`
+        );
 
         // Mark as error to prevent infinite retry loop
         this.db.updateSyncStatus(
