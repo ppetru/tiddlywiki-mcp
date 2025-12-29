@@ -781,7 +781,7 @@ async function startHttpTransport() {
       // Create fresh server and transport for this request
       const server = createServer();
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
+        sessionIdGenerator: undefined,
       });
 
       // Connect and handle the request with timeout
