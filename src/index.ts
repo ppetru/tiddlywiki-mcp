@@ -318,7 +318,7 @@ async function startHttpTransport() {
   // MCP POST endpoint - handles JSON-RPC requests in stateless mode
   app.post('/mcp', async (req: Request, res: Response) => {
     const requestId = randomUUID().slice(0, 8);
-    logger.log(`[MCP Server] [${requestId}] Handling request (stateless mode)`);
+    logger.debug(`[MCP Server] [${requestId}] Handling request`);
 
     // Create timeout promise
     let timeoutId: NodeJS.Timeout | null = null;
@@ -343,7 +343,7 @@ async function startHttpTransport() {
 
       await Promise.race([handlePromise, timeoutPromise]);
 
-      logger.log(`[MCP Server] [${requestId}] Request completed`);
+      logger.debug(`[MCP Server] [${requestId}] Request completed`);
     } catch (error) {
       const err = error as Error;
       const isTimeout = err.message.includes('timed out');
@@ -394,9 +394,10 @@ async function startHttpTransport() {
 
   // Start HTTP server
   app.listen(port, () => {
-    logger.log(`[MCP Server] HTTP server listening on port ${port} (stateless mode)`);
-    logger.log(`[MCP Server] Health check: http://localhost:${port}/health`);
-    logger.log(`[MCP Server] MCP endpoint: http://localhost:${port}/mcp`);
+    logger.log(`[MCP Server] HTTP server listening on port ${port}`);
+    logger.debug(
+      `[MCP Server] Health: http://localhost:${port}/health | MCP: http://localhost:${port}/mcp`
+    );
   });
 }
 
@@ -417,13 +418,12 @@ async function main() {
   const embeddingsDbPath = process.env.EMBEDDINGS_DB_PATH || './embeddings.db';
 
   logger.log(`[MCP Server] Starting TiddlyWiki MCP Server...`);
-  logger.log(`[MCP Server] Transport: ${transport}`);
-  logger.log(`[MCP Server] TiddlyWiki URL: ${tiddlywikiUrl}`);
-  logger.log(`[MCP Server] Auth header: ${authHeader}`);
-  logger.log(`[MCP Server] Auth user: ${authUser}`);
-  logger.log(`[MCP Server] Embeddings enabled: ${embeddingsEnabled}`);
+  logger.debug(`[MCP Server] Transport: ${transport}`);
+  logger.debug(`[MCP Server] TiddlyWiki URL: ${tiddlywikiUrl}`);
+  logger.debug(`[MCP Server] Auth: ${authHeader}=${authUser}`);
+  logger.debug(`[MCP Server] Embeddings: ${embeddingsEnabled ? embeddingsDbPath : 'disabled'}`);
   if (embeddingsEnabled) {
-    logger.log(`[MCP Server] Embeddings database: ${embeddingsDbPath}`);
+    logger.debug(`[MCP Server] Ollama URL: ${ollamaUrl}`);
   }
 
   try {
@@ -434,17 +434,16 @@ async function main() {
       authUser,
     });
 
-    logger.log(`[MCP Server] TiddlyWiki client initialized`);
+    logger.debug(`[MCP Server] TiddlyWiki client initialized`);
 
     // Initialize embeddings infrastructure (if enabled)
     if (embeddingsEnabled) {
       try {
-        logger.log(`[MCP Server] Initializing embeddings infrastructure...`);
-        logger.log(`[MCP Server] Ollama URL: ${ollamaUrl}`);
+        logger.debug(`[MCP Server] Initializing embeddings infrastructure...`);
 
         // Initialize database
         embeddingsDB = new EmbeddingsDB(embeddingsDbPath);
-        logger.log(`[MCP Server] Embeddings database initialized`);
+        logger.debug(`[MCP Server] Embeddings database initialized`);
 
         // Initialize Ollama client
         ollamaClient = new OllamaClient(ollamaUrl);
@@ -452,7 +451,7 @@ async function main() {
         // Check Ollama health
         const healthy = await ollamaClient.healthCheck();
         if (healthy) {
-          logger.log(`[MCP Server] Ollama is healthy`);
+          logger.debug(`[MCP Server] Ollama is healthy`);
         } else {
           logger.warn(`[MCP Server] WARNING: Ollama is not responding at ${ollamaUrl}`);
           logger.warn(`[MCP Server] Semantic search will not be available until Ollama is running`);
@@ -466,11 +465,12 @@ async function main() {
         });
 
         await syncWorker.start();
-        logger.log(`[MCP Server] Sync worker started`);
+        logger.debug(`[MCP Server] Sync worker started`);
 
         const status = syncWorker.getStatus();
-        logger.log(`[MCP Server] Indexed tiddlers: ${status.indexedTiddlers}`);
-        logger.log(`[MCP Server] Total embeddings: ${status.totalEmbeddings}`);
+        logger.log(
+          `[MCP Server] Embeddings ready (${status.indexedTiddlers} tiddlers, ${status.totalEmbeddings} chunks)`
+        );
       } catch (error) {
         const err = error as Error;
         logger.warn(`[MCP Server] WARNING: Failed to initialize embeddings: ${err.message}`);

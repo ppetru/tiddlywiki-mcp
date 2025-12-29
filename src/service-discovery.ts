@@ -29,7 +29,7 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, errorMsg: string)
  */
 export async function resolveConsulService(serviceName: string): Promise<ServiceEndpoint> {
   try {
-    logger.log(`[ServiceDiscovery] Resolving SRV record for ${serviceName}...`);
+    logger.debug(`[ServiceDiscovery] Resolving SRV record for ${serviceName}...`);
 
     // Resolve SRV record using Node.js DNS with timeout
     const srvRecords = await withTimeout(
@@ -62,7 +62,7 @@ export async function resolveConsulService(serviceName: string): Promise<Service
       }
 
       const host = addresses[0];
-      logger.log(`[ServiceDiscovery] Resolved ${serviceName} -> ${host}:${port}`);
+      logger.debug(`[ServiceDiscovery] Resolved ${serviceName} -> ${host}:${port}`);
 
       return { host, port };
     } catch (addrError) {

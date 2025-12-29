@@ -107,7 +107,7 @@ export class SyncWorker {
    */
   private async runSync(): Promise<void> {
     if (this.isSyncing) {
-      logger.log('[SyncWorker] Sync already in progress, skipping');
+      logger.debug('[SyncWorker] Sync already in progress, skipping');
       return;
     }
 
@@ -115,7 +115,7 @@ export class SyncWorker {
     const startTime = Date.now();
 
     try {
-      logger.log('[SyncWorker] Starting sync cycle...');
+      logger.debug('[SyncWorker] Starting sync cycle...');
 
       // Check Ollama health
       const healthy = await this.ollama.healthCheck();
@@ -136,7 +136,7 @@ export class SyncWorker {
         (t) => !t.title.startsWith('/') && !t.title.includes('.tid')
       );
 
-      logger.log(
+      logger.debug(
         `[SyncWorker] Found ${validTiddlers.length} total tiddlers (${allTiddlers.length - validTiddlers.length} filesystem paths filtered)`
       );
 
@@ -177,17 +177,17 @@ export class SyncWorker {
         // Successful tiddlers (status='indexed') are only re-indexed if modified timestamp changes (handled above)
 
         if (shouldIndex) {
-          logger.log(`[SyncWorker] Indexing ${tiddler.title}: ${reason}`);
+          logger.debug(`[SyncWorker] Queuing ${tiddler.title}: ${reason}`);
           tiddlersToIndex.push(tiddler);
         }
       }
 
       if (tiddlersToIndex.length === 0) {
-        logger.log('[SyncWorker] No tiddlers need indexing');
+        logger.debug('[SyncWorker] No tiddlers need indexing');
         return;
       }
 
-      logger.log(`[SyncWorker] Indexing ${tiddlersToIndex.length} tiddlers...`);
+      logger.debug(`[SyncWorker] Indexing ${tiddlersToIndex.length} tiddlers...`);
 
       // Process tiddlers in batches and track results
       const stats = {
@@ -209,7 +209,7 @@ export class SyncWorker {
         }
 
         const processed = i + batch.length;
-        logger.log(
+        logger.debug(
           `[SyncWorker] Progress: ${processed}/${tiddlersToIndex.length} tiddlers processed`
         );
       }
@@ -290,7 +290,7 @@ export class SyncWorker {
         );
 
         const tokenCount = this.ollama.countTokens(fullTiddler.text);
-        logger.log(
+        logger.debug(
           `[SyncWorker] Indexed ${fullTiddler.title} (${tokenCount} tokens, ${chunks.length} chunks)`
         );
 

@@ -73,7 +73,7 @@ export class OllamaClient {
     }
 
     const baseUrl = await this.getBaseUrl();
-    logger.log(`[Ollama] generateEmbeddings: ${texts.length} text(s)`);
+    logger.debug(`[Ollama] generateEmbeddings: ${texts.length} text(s)`);
 
     const response = await fetchWithTimeout(
       `${baseUrl}/api/embed`,
@@ -96,7 +96,7 @@ export class OllamaClient {
     }
 
     const data: OllamaEmbedResponse = await response.json();
-    logger.log(`[Ollama] generateEmbeddings: OK (${data.embeddings.length} embeddings)`);
+    logger.debug(`[Ollama] generateEmbeddings: OK (${data.embeddings.length} embeddings)`);
     return data.embeddings;
   }
 
@@ -135,7 +135,7 @@ export class OllamaClient {
   async healthCheck(): Promise<boolean> {
     try {
       const baseUrl = await this.getBaseUrl();
-      logger.log(`[Ollama] healthCheck: ${baseUrl}`);
+      logger.debug(`[Ollama] healthCheck: ${baseUrl}`);
 
       const response = await fetchWithTimeout(
         baseUrl,
@@ -144,7 +144,7 @@ export class OllamaClient {
         'healthCheck'
       );
 
-      logger.log(`[Ollama] healthCheck: ${response.ok ? 'OK' : 'FAILED'} (${response.status})`);
+      logger.debug(`[Ollama] healthCheck: ${response.ok ? 'OK' : 'FAILED'} (${response.status})`);
       return response.ok;
     } catch (error) {
       const errMsg = error instanceof Error ? error.message : String(error);

@@ -158,7 +158,7 @@ export async function queryTiddlers(
   const url = `${baseUrl}/recipes/default/tiddlers.json?filter=${encodedFilter}`;
 
   const filterPreview = filter.length > 80 ? filter.substring(0, 80) + '...' : filter;
-  logger.log(
+  logger.debug(
     `[TiddlyWiki HTTP] queryTiddlers: filter="${filterPreview}" includeText=${includeText}`
   );
 
@@ -178,7 +178,7 @@ export async function queryTiddlers(
   }
 
   let tiddlers = (await response.json()) as Tiddler[];
-  logger.log(`[TiddlyWiki HTTP] queryTiddlers: ${tiddlers.length} tiddlers matched`);
+  logger.debug(`[TiddlyWiki HTTP] queryTiddlers: ${tiddlers.length} tiddlers matched`);
 
   // Apply offset and limit BEFORE fetching full content (optimization)
   const endIndex = limit !== undefined ? offset + limit : undefined;
@@ -187,7 +187,7 @@ export async function queryTiddlers(
   // If includeText is false, the API already excludes text by default
   // If includeText is true, we need to fetch each tiddler individually
   if (includeText && tiddlers.length > 0) {
-    logger.log(`[TiddlyWiki HTTP] Fetching full content for ${tiddlers.length} tiddlers...`);
+    logger.debug(`[TiddlyWiki HTTP] Fetching full content for ${tiddlers.length} tiddlers...`);
 
     // Use Promise.allSettled to avoid cascade failures
     const results = await Promise.allSettled(tiddlers.map((t) => getTiddler(t.title)));
@@ -202,7 +202,9 @@ export async function queryTiddlers(
       logger.warn(`[TiddlyWiki HTTP] ${failed}/${tiddlers.length} tiddlers failed to fetch`);
     }
 
-    logger.log(`[TiddlyWiki HTTP] Successfully fetched ${successful.length} tiddlers with content`);
+    logger.debug(
+      `[TiddlyWiki HTTP] Successfully fetched ${successful.length} tiddlers with content`
+    );
     return successful;
   }
 
@@ -218,7 +220,7 @@ export async function getTiddler(title: string): Promise<Tiddler | null> {
   const url = `${baseUrl}/recipes/default/tiddlers/${encodedTitle}`;
 
   const titlePreview = title.length > 50 ? title.substring(0, 50) + '...' : title;
-  logger.log(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}"`);
+  logger.debug(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}"`);
 
   const response = await fetchWithTimeout(
     url,
@@ -228,7 +230,7 @@ export async function getTiddler(title: string): Promise<Tiddler | null> {
   );
 
   if (response.status === 404) {
-    logger.log(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}" not found (404)`);
+    logger.debug(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}" not found (404)`);
     return null;
   }
 
@@ -240,7 +242,7 @@ export async function getTiddler(title: string): Promise<Tiddler | null> {
     throw new Error(`Failed to get tiddler "${title}": ${response.status} ${response.statusText}`);
   }
 
-  logger.log(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}" OK`);
+  logger.debug(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}" OK`);
   return (await response.json()) as Tiddler;
 }
 
@@ -257,7 +259,7 @@ export async function putTiddler(tiddler: Tiddler): Promise<void> {
 
   const titlePreview =
     tiddler.title.length > 50 ? tiddler.title.substring(0, 50) + '...' : tiddler.title;
-  logger.log(
+  logger.debug(
     `[TiddlyWiki HTTP] putTiddler: "${titlePreview}" (${JSON.stringify(tiddlerFields).length} bytes)`
   );
 
@@ -282,7 +284,7 @@ export async function putTiddler(tiddler: Tiddler): Promise<void> {
     );
   }
 
-  logger.log(`[TiddlyWiki HTTP] putTiddler: "${titlePreview}" OK (${response.status})`);
+  logger.debug(`[TiddlyWiki HTTP] putTiddler: "${titlePreview}" OK (${response.status})`);
 }
 
 /**
@@ -294,7 +296,7 @@ export async function deleteTiddler(title: string): Promise<void> {
   const url = `${baseUrl}/bags/default/tiddlers/${encodedTitle}`;
 
   const titlePreview = title.length > 50 ? title.substring(0, 50) + '...' : title;
-  logger.log(`[TiddlyWiki HTTP] deleteTiddler: "${titlePreview}"`);
+  logger.debug(`[TiddlyWiki HTTP] deleteTiddler: "${titlePreview}"`);
 
   const response = await fetchWithTimeout(
     url,
@@ -316,7 +318,7 @@ export async function deleteTiddler(title: string): Promise<void> {
     );
   }
 
-  logger.log(`[TiddlyWiki HTTP] deleteTiddler: "${titlePreview}" OK (${response.status})`);
+  logger.debug(`[TiddlyWiki HTTP] deleteTiddler: "${titlePreview}" OK (${response.status})`);
 }
 
 /**
