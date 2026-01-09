@@ -41,7 +41,24 @@ This project uses native SQLite modules that require compilation. You'll need:
 
 ## Installation
 
+### From npm (recommended)
+
 ```bash
+TIDDLYWIKI_URL=http://localhost:8080 npx tiddlywiki-mcp-server
+```
+
+Or install globally:
+
+```bash
+npm install -g tiddlywiki-mcp-server
+TIDDLYWIKI_URL=http://localhost:8080 tiddlywiki-mcp-server
+```
+
+### From source
+
+```bash
+git clone https://github.com/ppetru/tiddlywiki-mcp.git
+cd tiddlywiki-mcp
 npm install
 npm run build
 ```
@@ -70,7 +87,7 @@ ollama pull nomic-embed-text
 ### 3. Start the MCP Server
 
 ```bash
-TIDDLYWIKI_URL=http://localhost:8080 node dist/index.js
+TIDDLYWIKI_URL=http://localhost:8080 npx tiddlywiki-mcp-server
 ```
 
 ## Configuration
@@ -106,8 +123,8 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 {
   "mcpServers": {
     "tiddlywiki": {
-      "command": "node",
-      "args": ["/path/to/tiddlywiki-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["tiddlywiki-mcp-server"],
       "env": {
         "TIDDLYWIKI_URL": "http://localhost:8080"
       }
@@ -121,7 +138,7 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 Start the server:
 
 ```bash
-TIDDLYWIKI_URL=http://localhost:8080 MCP_TRANSPORT=http MCP_PORT=3000 node dist/index.js
+TIDDLYWIKI_URL=http://localhost:8080 MCP_TRANSPORT=http MCP_PORT=3000 npx tiddlywiki-mcp-server
 ```
 
 The server exposes:
