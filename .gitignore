@@ -31,6 +31,6 @@ result-*
 coverage/
 
 # Embeddings database
-embeddings.db
-embeddings.db-shm
-embeddings.db-wal
+embeddings*.db
+embeddings*.db-shm
+embeddings*.db-wal
