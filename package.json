@@ -23,7 +23,7 @@
     "tiddlywiki",
     "model-context-protocol"
   ],
-  "author": "ppetru",
+  "author": "Petru Paler <petru@paler.net> (https://petru.paler.net)",
   "license": "MIT",
   "engines": {
     "node": ">=22"
