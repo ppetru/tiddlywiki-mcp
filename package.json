@@ -4,6 +4,16 @@
   "description": "MCP server for TiddlyWiki with stdio and HTTP transport support",
   "type": "module",
   "main": "dist/index.js",
+  "bin": {
+    "tiddlywiki-mcp-server": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ppetru/tiddlywiki-mcp.git"
+  },
   "scripts": {
     "build": "tsc",
     "watch": "tsc --watch",
