@@ -1,8 +1,5 @@
-/**
- * TiddlyWiki Filter Reference
- *
- * Complete reference for TiddlyWiki filter syntax and operators
- */
+// ABOUTME: TiddlyWiki filter syntax reference documentation
+// ABOUTME: Exposed as an MCP resource to help LLMs understand filter queries
 
 export const FILTER_REFERENCE = `# TiddlyWiki Filter Reference
 
@@ -51,7 +48,7 @@ Full-text search:
 Match by field value:
 - \`[field:fieldname[value]]\` - exact match
 - \`[type[text/markdown]]\` - tiddlers of specific type
-- \`[creator[ppetru]]\` - created by user
+- \`[creator[username]]\` - created by user
 
 ## Date Operators
 

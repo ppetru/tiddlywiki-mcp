@@ -1,3 +1,6 @@
+// ABOUTME: Client for Ollama API to generate text embeddings
+// ABOUTME: Handles chunking, token counting, and health checks
+
 import { encode } from 'gpt-tokenizer';
 import * as logger from '../logger.js';
 import { getServiceUrl } from '../service-discovery.js';

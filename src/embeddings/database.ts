@@ -1,3 +1,6 @@
+// ABOUTME: SQLite database for storing and querying vector embeddings
+// ABOUTME: Uses sqlite-vec for efficient similarity search operations
+
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 

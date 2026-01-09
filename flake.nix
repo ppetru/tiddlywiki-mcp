@@ -51,7 +51,7 @@
 
           src = ./.;
 
-          npmDepsHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="; # Placeholder
+          npmDepsHash = "sha256-8HCwM4/R0w0fi38bv4zFxuYjv9TMBbHr671Hhfe8CN8=";
 
           buildPhase = ''
             npm run build

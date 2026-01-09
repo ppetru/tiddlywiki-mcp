@@ -1,8 +1,5 @@
-/**
- * TiddlyWiki HTTP Client
- *
- * Provides HTTP-based access to TiddlyWiki server with proper metadata handling
- */
+// ABOUTME: HTTP client for TiddlyWiki server communication
+// ABOUTME: Handles tiddler CRUD operations with proper metadata preservation
 
 import { getServiceUrl } from './service-discovery.js';
 import * as logger from './logger.js';

@@ -1,3 +1,6 @@
+// ABOUTME: Background worker that syncs tiddler content to vector embeddings
+// ABOUTME: Periodically checks for changes and updates the embeddings database
+
 import { EmbeddingsDB } from './database.js';
 import { OllamaClient } from './ollama-client.js';
 import { queryTiddlers, Tiddler } from '../tiddlywiki-http.js';
@@ -295,9 +298,10 @@ export class SyncWorker {
         );
 
         return 'indexed';
-      } catch (embeddingError: any) {
+      } catch (embeddingError) {
         // Handle Ollama API errors (e.g., context length exceeded)
-        const errorMessage = embeddingError?.message || String(embeddingError);
+        const errorMessage =
+          embeddingError instanceof Error ? embeddingError.message : String(embeddingError);
         logger.error(
           `[SyncWorker] Failed to generate embeddings for ${fullTiddler.title}: ${errorMessage}`
         );
