@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    reporters: ['basic'],
+    onConsoleLog: () => false,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
