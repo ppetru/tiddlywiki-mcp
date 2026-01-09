@@ -1,6 +1,6 @@
 {
   "name": "tiddlywiki-mcp-server",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MCP server for TiddlyWiki with stdio and HTTP transport support",
   "type": "module",
   "main": "dist/index.js",
