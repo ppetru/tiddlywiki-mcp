@@ -240,7 +240,19 @@ export async function getTiddler(title: string): Promise<Tiddler | null> {
   }
 
   logger.debug(`[TiddlyWiki HTTP] getTiddler: "${titlePreview}" OK`);
-  return (await response.json()) as Tiddler;
+  return flattenTiddlerFields((await response.json()) as Tiddler);
+}
+
+/**
+ * Move custom fields from the nested `fields` object to the top level.
+ * TiddlyWiki's GET endpoint nests non-standard fields under `fields`, and its
+ * PUT endpoint lets that nested object override top-level values. Without
+ * flattening, updates to custom fields would be silently overwritten.
+ */
+export function flattenTiddlerFields(tiddler: Tiddler): Tiddler {
+  const { fields, ...rest } = tiddler;
+  if (!fields || typeof fields !== 'object') return rest;
+  return { ...rest, ...fields };
 }
 
 /**

@@ -1,10 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   generateTimestamp,
   createTiddlerObject,
   updateTiddlerObject,
+  flattenTiddlerFields,
+  getTiddler,
+  initTiddlyWiki,
   type Tiddler
 } from '../../src/tiddlywiki-http.js';
+
+// Mirrors TiddlyWiki's PUT /recipes/default/tiddlers/:title handler
+// (core-server/server/routes/put-tiddler.js in TiddlyWiki 5.4), which
+// pulls subfields from the nested `fields` object up to the top level.
+function applyTiddlyWikiPut(body: Tiddler): Record<string, unknown> {
+  const stored: Record<string, unknown> = { ...body };
+  if (body.fields) {
+    Object.assign(stored, body.fields);
+    delete stored.fields;
+  }
+  return stored;
+}
 
 describe('tiddlywiki-http', () => {
   describe('generateTimestamp', () => {
@@ -220,6 +235,67 @@ describe('tiddlywiki-http', () => {
       expect(updated.creator).toBe('original-user');
       expect(updated.created).toBe('20250101000000000');
       expect(updated.modifier).toBe('batch-user');
+    });
+  });
+
+  describe('flattenTiddlerFields', () => {
+    // Shape returned by TiddlyWiki's GET endpoint: custom fields are nested
+    const fromServer: Tiddler = {
+      title: 'Note',
+      text: 'Body',
+      tags: 'Concept',
+      type: 'text/markdown',
+      revision: 3,
+      bag: 'default',
+      fields: { status: 'current', reviewed: '2025-01-01' },
+    };
+
+    it('should move nested custom fields to the top level', () => {
+      const flat = flattenTiddlerFields(fromServer);
+
+      expect(flat.fields).toBeUndefined();
+      expect(flat.status).toBe('current');
+      expect(flat.reviewed).toBe('2025-01-01');
+      expect(flat.text).toBe('Body');
+    });
+
+    it('should return tiddlers without nested fields unchanged', () => {
+      const plain: Tiddler = { title: 'Plain', text: 'Body' };
+
+      expect(flattenTiddlerFields(plain)).toEqual(plain);
+    });
+
+    it('should keep custom field updates after a TiddlyWiki PUT', () => {
+      const updated = updateTiddlerObject(
+        flattenTiddlerFields(fromServer),
+        { status: 'outdated' },
+        'user'
+      );
+      const stored = applyTiddlyWikiPut(updated);
+
+      expect(stored.status).toBe('outdated');
+      expect(stored.reviewed).toBe('2025-01-01');
+    });
+
+    it('should be applied by getTiddler', async () => {
+      initTiddlyWiki({
+        tiddlywikiUrl: 'http://127.0.0.1:8080',
+        authHeader: 'X-Oidc-Username',
+        authUser: 'user',
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(new Response(JSON.stringify(fromServer), { status: 200 }))
+      );
+
+      const tiddler = await getTiddler('Note');
+
+      expect(tiddler?.fields).toBeUndefined();
+      expect(tiddler?.status).toBe('current');
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
     });
   });
 });
