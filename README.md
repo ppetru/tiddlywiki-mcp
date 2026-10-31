@@ -106,6 +106,9 @@ All configuration is via environment variables. See `.env.example` for a complet
 |----------|---------|-------------|
 | `MCP_TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_PORT` | `3000` | HTTP server port (when using http transport) |
+| `MCP_HOST` | `127.0.0.1` | HTTP server interface. Set `0.0.0.0` to accept connections from other machines or containers. See [Deployment](#deployment) |
+| `MCP_AUTH_TOKEN` | none | Require `Authorization: Bearer <token>` on `/mcp` (at least 32 characters) |
+| `MCP_ALLOWED_HOSTS` | localhost names on loopback, any otherwise | Comma-separated hostnames accepted in the `Host` header, e.g. for a reverse proxy on the same machine |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama API URL |
 | `OLLAMA_MODEL` | `nomic-embed-text` | Embedding model name |
 | `EMBEDDINGS_ENABLED` | `true` | Enable/disable semantic search |
@@ -142,8 +145,37 @@ TIDDLYWIKI_URL=http://localhost:8080 MCP_TRANSPORT=http MCP_PORT=3000 npx tiddly
 ```
 
 The server exposes:
-- `GET /health` - Health check endpoint
+- `GET /health` - Health check endpoint (never requires a token)
 - `POST /mcp` - MCP JSON-RPC endpoint (stateless mode)
+
+By default the server only listens on `127.0.0.1` and rejects requests whose `Host` header is not a localhost name, which protects it against DNS rebinding from websites in a local browser. The same applies to any `MCP_HOST` that resolves only to loopback addresses (`127.0.0.0/8`, `::1`). With `MCP_HOST=localhost`, Node.js may listen on `::1` only, so prefer `127.0.0.1`.
+
+Browser requests to `/mcp` are also checked by their `Origin` header, as the MCP spec requires. An origin is accepted if its hostname is an allowed `Host` name (e.g. a local dev tool on `http://localhost:6274`), or, when any `Host` is allowed, if it is the server's own origin. Clients that send no `Origin` (non-browser clients) are not affected.
+
+`MCP_HOST`, `MCP_AUTH_TOKEN` and `MCP_ALLOWED_HOSTS` must not be set to an empty value. The server refuses to start, because an empty secret from a template or vault lookup would otherwise switch auth off silently.
+
+### Deployment
+
+To reach the server from other machines, containers or an orchestrator (Docker, Nomad), set `MCP_HOST=0.0.0.0` and protect it with a token:
+
+```bash
+export MCP_AUTH_TOKEN=$(openssl rand -hex 32)
+TIDDLYWIKI_URL=http://localhost:8080 MCP_TRANSPORT=http MCP_HOST=0.0.0.0 npx tiddlywiki-mcp-server
+```
+
+Clients then send `Authorization: Bearer <token>` with every request to `/mcp`. Use HTTPS (e.g. a reverse proxy) when the token crosses a network you don't control. A 401 response carries `WWW-Authenticate: Bearer`. Some MCP clients take that as a cue to try OAuth discovery, so a mistyped token can show up as an OAuth error in the client.
+
+**Behind an authenticating proxy** (e.g. OIDC): the token is optional, since the proxy decides who gets through. Without a token, the server logs a warning when it listens beyond localhost, as a reminder that the port itself must not be reachable around the proxy. If the proxy forwards its own `Authorization` header, don't set `MCP_AUTH_TOKEN`, because the two would clash.
+
+**Reverse proxy or sidecar on the same machine** (e.g. Caddy, nginx, a Consul Connect/Envoy sidecar): keep `MCP_HOST=127.0.0.1` and list the hostnames the proxy forwards in the `Host` header, e.g. `MCP_ALLOWED_HOSTS=wiki.example.com`. Otherwise these requests are rejected with 403 by the DNS rebinding protection. `MCP_ALLOWED_HOSTS` replaces the default list, so add `localhost` if you also connect locally. Entries are hostnames without a port; write IPv6 addresses in brackets.
+
+**Containers without a token** (e.g. Docker with `-p 3000:3000` on a laptop): with `MCP_HOST=0.0.0.0`, set `MCP_ALLOWED_HOSTS` as well. Otherwise a website in a local browser can reach the server through DNS rebinding.
+
+### Upgrading to 2.0
+
+The HTTP server used to listen on all interfaces and now defaults to `127.0.0.1`. If you run it in a container, on Nomad, or reach it from another machine, set `MCP_HOST=0.0.0.0`, preferably together with `MCP_AUTH_TOKEN`. Otherwise port mappings and health checks can't reach the server. Behind a sidecar on the same host, keep `127.0.0.1` and set `MCP_ALLOWED_HOSTS` instead (see above).
+
+Browser-based clients from other origins are now rejected (see `Origin` above).
 
 ### Example Tool Usage
 

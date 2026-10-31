@@ -12,10 +12,11 @@ import {
   ReadResourceRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'node:crypto';
-import express from 'express';
+import { isIP } from 'node:net';
 import type { Request, Response } from 'express';
 import { initTiddlyWiki } from './tiddlywiki-http.js';
 import { getFilterReference } from './filter-reference.js';
+import { createHttpApp, exposureWarning, loadHttpConfig, type HttpConfig } from './http-auth.js';
 import { EmbeddingsDB } from './embeddings/database.js';
 import { OllamaClient } from './embeddings/ollama-client.js';
 import { SyncWorker } from './embeddings/sync-worker.js';
@@ -302,10 +303,24 @@ async function startStdioTransport() {
  * This is acceptable for our use case since we only respond to client requests.
  */
 async function startHttpTransport() {
-  const app = express();
   const port = parseInt(process.env.MCP_PORT || process.env.PORT || '3000', 10);
 
-  app.use(express.json());
+  let httpConfig: HttpConfig;
+  try {
+    httpConfig = await loadHttpConfig(process.env);
+  } catch (error) {
+    logger.error(`[MCP Server] ${(error as Error).message}`);
+    process.exit(1);
+  }
+  const { host, authToken } = httpConfig;
+
+  // Host/Origin validation, token auth and the body parser come before any route
+  const app = createHttpApp(httpConfig);
+
+  const warning = exposureWarning(httpConfig);
+  if (warning) {
+    logger.warn(`[MCP Server] WARNING: ${warning}`);
+  }
 
   // Health check endpoint for Nomad
   app.get('/health', (_req: Request, res: Response) => {
@@ -393,11 +408,19 @@ async function startHttpTransport() {
   });
 
   // Start HTTP server
-  app.listen(port, () => {
-    logger.log(`[MCP Server] HTTP server listening on port ${port}`);
+  const httpServer = app.listen(port, host, () => {
+    const address = isIP(host) === 6 ? `[${host}]` : host;
+    logger.log(`[MCP Server] HTTP server listening on ${address}:${port}`);
+    logger.debug(`[MCP Server] Auth: ${authToken ? 'bearer token' : 'none'}`);
     logger.debug(
-      `[MCP Server] Health: http://localhost:${port}/health | MCP: http://localhost:${port}/mcp`
+      `[MCP Server] Health: http://${address}:${port}/health | MCP: http://${address}:${port}/mcp`
     );
+  });
+
+  // e.g. EADDRINUSE, or an MCP_HOST that is not an address of this machine
+  httpServer.on('error', (error: NodeJS.ErrnoException) => {
+    logger.error(`[MCP Server] Cannot listen on ${host}:${port}: ${error.code ?? error.message}`);
+    process.exit(1);
   });
 }
 
