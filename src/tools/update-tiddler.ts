@@ -9,6 +9,7 @@ import {
   getAuthUser,
   type Tiddler,
 } from '../tiddlywiki-http.js';
+import { checkWrite, policyErrorResult } from '../write-policy.js';
 import type { ToolResult } from './types.js';
 import { UpdateTiddlerInput } from './types.js';
 
@@ -99,6 +100,9 @@ export async function handleUpdateTiddler(args: unknown): Promise<ToolResult> {
   if (type !== undefined) updates.type = type;
 
   const updated = updateTiddlerObject(current, updates, getAuthUser());
+
+  const violation = checkWrite(updated, updates);
+  if (violation) return policyErrorResult(violation);
 
   // Generate diff
   const diff = generateTiddlerDiff(current, updated);

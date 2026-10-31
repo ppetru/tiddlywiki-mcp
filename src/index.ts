@@ -16,6 +16,12 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import { initTiddlyWiki } from './tiddlywiki-http.js';
 import { getFilterReference } from './filter-reference.js';
+import {
+  ineffectiveAllowedTypes,
+  isToolAllowed,
+  loadWritePolicy,
+  setWritePolicy,
+} from './write-policy.js';
 import { EmbeddingsDB } from './embeddings/database.js';
 import { OllamaClient } from './embeddings/ollama-client.js';
 import { SyncWorker } from './embeddings/sync-worker.js';
@@ -231,7 +237,7 @@ function registerHandlers(server: Server): void {
             required: ['title'],
           },
         },
-      ],
+      ].filter((tool) => isToolAllowed(tool.name)),
     };
   });
 
@@ -240,6 +246,10 @@ function registerHandlers(server: Server): void {
     const { name, arguments: args } = request.params;
 
     try {
+      if (!isToolAllowed(name)) {
+        throw new Error(`Tool ${name} is not allowed (see PERMISSIONS)`);
+      }
+
       switch (name) {
         case 'search_tiddlers':
           return await handleSearchTiddlers(args, getToolDependencies());
@@ -417,11 +427,33 @@ async function main() {
   const embeddingsEnabled = process.env.EMBEDDINGS_ENABLED !== 'false'; // Enabled by default
   const embeddingsDbPath = process.env.EMBEDDINGS_DB_PATH || './embeddings.db';
 
+  let writePolicy;
+  try {
+    writePolicy = loadWritePolicy(process.env);
+  } catch (error) {
+    logger.error(`[MCP Server] ${(error as Error).message}`);
+    process.exit(1);
+  }
+  setWritePolicy(writePolicy);
+
   logger.log(`[MCP Server] Starting TiddlyWiki MCP Server...`);
   logger.debug(`[MCP Server] Transport: ${transport}`);
   logger.debug(`[MCP Server] TiddlyWiki URL: ${tiddlywikiUrl}`);
   logger.debug(`[MCP Server] Auth: ${authHeader}=${authUser}`);
   logger.debug(`[MCP Server] Embeddings: ${embeddingsEnabled ? embeddingsDbPath : 'disabled'}`);
+  logger.debug(`[MCP Server] Permissions: ${[...writePolicy.permissions].join(', ')}`);
+  logger.debug(`[MCP Server] Allowed types: ${writePolicy.allowedTypes?.join(', ') ?? 'any'}`);
+  if (writePolicy.allowCodeWrites) {
+    logger.warn(
+      '[MCP Server] WARNING: UNSAFE_ALLOW_CODE_WRITES is enabled. Clients can write tiddlers that TiddlyWiki executes as code on the server host.'
+    );
+  }
+  const ineffectiveTypes = ineffectiveAllowedTypes(writePolicy);
+  if (ineffectiveTypes.length > 0) {
+    logger.warn(
+      `[MCP Server] WARNING: ALLOWED_TYPES ${ineffectiveTypes.join(', ')} ignored while UNSAFE_ALLOW_CODE_WRITES is off`
+    );
+  }
   if (embeddingsEnabled) {
     logger.debug(`[MCP Server] Ollama URL: ${ollamaUrl}`);
   }

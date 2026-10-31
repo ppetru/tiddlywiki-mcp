@@ -1,11 +1,12 @@
 // ABOUTME: Tests for create, update, and delete MCP tool handlers
 // ABOUTME: Covers basic operations, custom fields, and error handling
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { handleCreateTiddler } from '../../src/tools/create-tiddler.js';
 import { handleUpdateTiddler } from '../../src/tools/update-tiddler.js';
 import { handleDeleteTiddler } from '../../src/tools/delete-tiddler.js';
 import { createMockTiddler, parseToolResultJson } from './test-utils.js';
+import { loadWritePolicy, setWritePolicy } from '../../src/write-policy.js';
 
 // Mock the tiddlywiki-http module
 vi.mock('../../src/tiddlywiki-http.js', () => ({
@@ -310,5 +311,134 @@ describe('handleDeleteTiddler', () => {
       expect(parsed.error).toContain('not found');
       expect(mockDeleteTiddler).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('write policy in handlers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockPutTiddler.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    setWritePolicy(loadWritePolicy({}));
+  });
+
+  it('should not create code tiddlers by default', async () => {
+    mockGetTiddler.mockResolvedValue(null);
+
+    const result = await handleCreateTiddler({
+      title: 'Boot',
+      text: 'console.log(1)',
+      type: 'application/javascript',
+      'module-type': 'startup',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(parseToolResultJson<{ error: string }>(result).error).toContain(
+      'UNSAFE_ALLOW_CODE_WRITES'
+    );
+    expect(mockPutTiddler).not.toHaveBeenCalled();
+  });
+
+  it('should not update a tiddler into a code tiddler via nested fields', async () => {
+    mockGetTiddler.mockResolvedValue(createMockTiddler());
+
+    const result = await handleUpdateTiddler({
+      title: 'Test Tiddler',
+      fields: { 'module-type': 'startup' },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(mockPutTiddler).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'nested __proto__',
+      '{"title":"P","text":"{}","type":"application/json","fields":{"__proto__":{"plugin-type":"plugin"}}}',
+      /Nested/,
+    ],
+    [
+      'whitespace field names',
+      '{"title":"P","text":"x","module-type ":"startup","type ":"application/javascript"}',
+      /Invalid field name/,
+    ],
+  ])('should reject a write with %s', async (_label, json, error) => {
+    mockGetTiddler.mockResolvedValue(null);
+
+    const result = await handleCreateTiddler(JSON.parse(json));
+
+    expect(result.isError).toBe(true);
+    expect(parseToolResultJson<{ error: string }>(result).error).toMatch(error);
+    expect(mockPutTiddler).not.toHaveBeenCalled();
+  });
+
+  it('should not send a top-level __proto__ to TiddlyWiki', async () => {
+    mockGetTiddler.mockResolvedValue(null);
+
+    // Zod's passthrough drops a top-level __proto__ key before the policy sees it
+    const result = await handleCreateTiddler(
+      JSON.parse('{"title":"P","text":"{}","type":"application/json","__proto__":{"plugin-type":"plugin"}}')
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(JSON.stringify(mockPutTiddler.mock.calls[0][0])).not.toMatch(/plugin-type|__proto__/);
+  });
+
+  it('should not turn an untagged tiddler into a format whose body sets fields', async () => {
+    mockGetTiddler.mockResolvedValue(createMockTiddler({ tags: undefined }));
+
+    const result = await handleUpdateTiddler({
+      title: 'Test Tiddler',
+      type: 'application/x-tiddler',
+      text: 'tags: $:/tags/RawMarkup\n\n<script></script>',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(mockPutTiddler).not.toHaveBeenCalled();
+  });
+
+  it('should not delete code tiddlers by default', async () => {
+    mockGetTiddler.mockResolvedValue(
+      createMockTiddler({ title: 'Boot', type: 'application/javascript' })
+    );
+
+    const result = await handleDeleteTiddler({ title: 'Boot' });
+
+    expect(result.isError).toBe(true);
+    expect(mockDeleteTiddler).not.toHaveBeenCalled();
+  });
+
+  it('should not delete system tiddlers by default', async () => {
+    const result = await handleDeleteTiddler({ title: '$:/config/Something' });
+
+    expect(result.isError).toBe(true);
+    expect(mockGetTiddler).not.toHaveBeenCalled();
+    expect(mockDeleteTiddler).not.toHaveBeenCalled();
+  });
+
+  it('should reject disallowed types', async () => {
+    setWritePolicy(loadWritePolicy({ ALLOWED_TYPES: 'text/markdown' }));
+    mockGetTiddler.mockResolvedValue(null);
+
+    const result = await handleCreateTiddler({
+      title: 'Note',
+      text: 'x',
+      type: 'text/vnd.tiddlywiki',
+    });
+
+    expect(result.isError).toBe(true);
+    expect(mockPutTiddler).not.toHaveBeenCalled();
+  });
+
+  it('should create ordinary tiddlers', async () => {
+    setWritePolicy(loadWritePolicy({ ALLOWED_TYPES: 'text/markdown' }));
+    mockGetTiddler.mockResolvedValue(null);
+
+    const result = await handleCreateTiddler({ title: 'Note', text: 'x', tags: 'Concept' });
+
+    expect(result.isError).toBeUndefined();
+    expect(mockPutTiddler).toHaveBeenCalledOnce();
   });
 });

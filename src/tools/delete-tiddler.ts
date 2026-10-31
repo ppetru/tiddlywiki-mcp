@@ -2,6 +2,7 @@
 // ABOUTME: Deletes tiddlers with preview of what will be deleted
 
 import { getTiddler, deleteTiddler } from '../tiddlywiki-http.js';
+import { checkDelete, policyErrorResult } from '../write-policy.js';
 import type { ToolResult } from './types.js';
 import { DeleteTiddlerInput } from './types.js';
 import { formatTiddlerPreview } from './create-tiddler.js';
@@ -12,6 +13,9 @@ import { formatTiddlerPreview } from './create-tiddler.js';
  */
 export async function handleDeleteTiddler(args: unknown): Promise<ToolResult> {
   const input = DeleteTiddlerInput.parse(args);
+
+  const violation = checkDelete(input.title);
+  if (violation) return policyErrorResult(violation);
 
   // Get current tiddler to show what will be deleted
   const current = await getTiddler(input.title);
@@ -26,6 +30,9 @@ export async function handleDeleteTiddler(args: unknown): Promise<ToolResult> {
       isError: true,
     };
   }
+
+  const existingViolation = checkDelete(input.title, current);
+  if (existingViolation) return policyErrorResult(existingViolation);
 
   // Generate preview of what will be deleted
   const preview = formatTiddlerPreview(current);
