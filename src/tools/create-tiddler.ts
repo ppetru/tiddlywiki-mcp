@@ -8,6 +8,7 @@ import {
   getAuthUser,
   type Tiddler,
 } from '../tiddlywiki-http.js';
+import { checkWrite, policyErrorResult } from '../write-policy.js';
 import type { ToolResult } from './types.js';
 import { CreateTiddlerInput } from './types.js';
 
@@ -61,6 +62,9 @@ export async function handleCreateTiddler(args: unknown): Promise<ToolResult> {
     ...createTiddlerObject(title, text, tags || '', type || 'text/markdown', getAuthUser()),
     ...customFields, // Add any custom fields
   };
+
+  const violation = checkWrite(newTiddler);
+  if (violation) return policyErrorResult(violation);
 
   // Generate preview
   const preview = formatTiddlerPreview(newTiddler);

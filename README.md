@@ -112,6 +112,32 @@ All configuration is via environment variables. See `.env.example` for a complet
 | `EMBEDDINGS_DB_PATH` | `./embeddings.db` | SQLite database path for embeddings |
 | `AUTH_HEADER` | `X-Oidc-Username` | HTTP header for authentication (can be any header your TiddlyWiki expects) |
 | `AUTH_USER` | `mcp-user` | Username for TiddlyWiki API requests |
+| `PERMISSIONS` | `read,create,update,delete` | Tools clients may use. Tools without permission are hidden from the tool list. See [Write Policy](#write-policy) |
+| `ALLOWED_TYPES` | safe types | Comma-separated content types clients may write, e.g. `text/markdown` |
+| `UNSAFE_ALLOW_CODE_WRITES` | `false` | Let clients write tiddlers that TiddlyWiki stores or loads as code, and any content type. See [Write Policy](#write-policy) |
+
+### Write Policy
+
+AI clients act on whatever they read, including instructions hidden in web pages or documents (prompt injection). The write policy limits what they can do to your wiki.
+
+**`PERMISSIONS`** maps tools to permissions: `read` (`search_tiddlers`), `create` (`create_tiddler`), `update` (`update_tiddler`), `delete` (`delete_tiddler`). For example, `PERMISSIONS=read,create,update` keeps clients from deleting anything.
+
+**`ALLOWED_TYPES`** restricts the content type of created tiddlers and of updates that change the type. `create_tiddler` defaults to `text/markdown`, so include it unless clients always send a type. While `UNSAFE_ALLOW_CODE_WRITES` is off, this can only narrow the safe types listed below.
+
+**`UNSAFE_ALLOW_CODE_WRITES`** is off by default. While it is off, the server rejects writes that TiddlyWiki would store or load as code: JavaScript modules, plugins, system tags and tiddlers, and formats whose text can define fields. It works as an allowlist, so it does not depend on predicting every TiddlyWiki parser:
+
+- **Types:** only `text/vnd.tiddlywiki`, `text/markdown`, `text/x-markdown`, `text/plain` and `application/json`. TiddlyWiki stores these so that only its own serializer writes fields. Other formats (`.tid` as a type, CSS and JavaScript header comments, `.multids`, HTML, plugin formats) are parsed for fields when the wiki loads, so their text could add tags or a `module-type` after a restart.
+- **No `module-type` or `plugin-type` field** (JavaScript modules and plugins).
+- **No `$:/` anywhere in `tags`** (e.g. `$:/tags/RawMarkup` injects into every page). It is matched as a substring because TiddlyWiki's list syntax has edge cases.
+- **No titles starting with `$:/`** (system tiddlers, e.g. overriding the page template).
+
+Tiddlers that don't meet these rules can't be edited or deleted either, and nor can `$:/` tiddlers.
+
+On a Node.js TiddlyWiki server, a JavaScript module with `module-type: startup` runs **on the server host** at the next restart. Only enable this if you trust every client and everything it reads.
+
+**What the write policy does not cover.** TiddlyWiki treats content as trusted: its renderer only neutralises `<script>`, and the Markdown plugin allows raw HTML. Wikitext or Markdown written by a client can therefore contain HTML such as `<iframe srcdoc="…">` that runs as script in the browser of whoever views the tiddler. With the wiki's origin, that script can save tiddlers through TiddlyWiki's own sync, bypassing this server. The policy can't prevent this without re-implementing TiddlyWiki's parsers. It belongs where content is rendered, for example a Content Security Policy in front of TiddlyWiki. The policy closes the direct route, where a single tool call becomes code on the next restart with nobody viewing the wiki. It does not make client-written content safe to view.
+
+**Field names.** Writes are rejected if they contain a nested `fields` object (send custom fields at the top level), field names with leading or trailing whitespace or control characters, or `__proto__`, `constructor` or `prototype`. TiddlyWiki trims field names when it loads tiddler files, so `"type "` would otherwise turn into `type` after a restart.
 
 ## Usage
 
